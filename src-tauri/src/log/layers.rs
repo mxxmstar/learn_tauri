@@ -8,7 +8,8 @@ use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_appender::non_blocking::WorkerGuard;
 use std::path::Path;
 
-use crate::config::LogConfig;
+use super::config::LogConfig;
+
 /// 控制台日志输出层
 pub struct ConsoleLayer {
     pub layer: Box<dyn tracing_subscriber::Layer<Registry> + Send + Sync>,
@@ -16,10 +17,6 @@ pub struct ConsoleLayer {
 
 impl ConsoleLayer {
     /// 构建控制台日志输出层
-    /// # 参数
-    /// * `config` - 日志配置
-    /// # 返回值
-    /// * `Self` - 控制台日志输出层
     pub fn new(config: &LogConfig) -> Self {        
         let layer = if config.json_format {
             Box::new(
@@ -50,14 +47,14 @@ impl ConsoleLayer {
 
 /// 日志文件层配置
 pub struct FileLayerConfig {
-    pub log_dir: String,    // 日志目录
-    pub file_prefix: String,    // 日志文件前缀
-    pub rotation: Rotation,    // 日志文件滚动策略
-    pub json_format: bool,    // 是否使用 JSON 格式输出日志
-    pub with_thread_id: bool,    // 是否显示线程ID
-    pub with_thread_name: bool,    // 是否显示线程名称
-    pub with_target: bool,    // 是否显示目标模块信息
-    pub with_file_line: bool,    // 是否显示文件名和行号
+    pub log_dir: String,
+    pub file_prefix: String,
+    pub rotation: Rotation,
+    pub json_format: bool,
+    pub with_thread_id: bool,
+    pub with_thread_name: bool,
+    pub with_target: bool,
+    pub with_file_line: bool,
 }
 
 impl From<&LogConfig> for FileLayerConfig {
@@ -66,13 +63,13 @@ impl From<&LogConfig> for FileLayerConfig {
         let path = Path::new(log_file);
         
         let log_dir = path.parent()
-            .and_then(|p| p.to_str())    // 转换为字符串 or None
-            .unwrap_or("logs")    // 如果 None 则使用默认值 "logs"
+            .and_then(|p| p.to_str())
+            .unwrap_or("logs")
             .to_string();
             
-        let file_prefix = path.file_stem()  // file_stem() 返回文件名，不包含扩展名
-            .and_then(|s| s.to_str())    // 转换为字符串 or None
-            .unwrap_or("app")    // 如果 None 则使用默认值 "app"
+        let file_prefix = path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("app")
             .to_string();
 
         let rotation = match config.rotation.as_deref() {
@@ -97,31 +94,22 @@ impl From<&LogConfig> for FileLayerConfig {
 
 /// 日志文件层
 pub struct FileLayer { 
-    pub guard: WorkerGuard,    // 日志文件层线程守卫
-    pub layer: Box<dyn tracing_subscriber::Layer<Registry> + Send + Sync>,    // 日志文件层
+    pub guard: WorkerGuard,
+    pub layer: Box<dyn tracing_subscriber::Layer<Registry> + Send + Sync>,
 }
 
 impl FileLayer {
-    /// 构建日志文件层
-    /// # 参数
-    /// * `config` - 日志文件层配置
-    /// # 返回值
-    /// * `anyhow::Result<Self>` - 日志文件层结果
     pub fn new(config: &FileLayerConfig) -> anyhow::Result<Self> {
-        // 确保日志目录存在，否则创建
         std::fs::create_dir_all(&config.log_dir)?;
 
-        // 创建日志文件滚动追加器
         let appender = RollingFileAppender::new(
             config.rotation.clone(),
             &config.log_dir,
             &format!("{}.log", config.file_prefix),        
         );
 
-        // 创建非阻塞日志文件追加器
         let (non_blocking, file_guard) = tracing_appender::non_blocking(appender);
 
-        // 创建日志文件层
         let layer: Box<dyn tracing_subscriber::Layer<Registry> + Send + Sync> = if config.json_format {
             Box::new(
                 fmt::layer()
@@ -156,26 +144,17 @@ pub struct ErrorLayer {
 }
 
 impl ErrorLayer {
-    /// 创建只记录 error 级别的日志层
-    /// # 参数
-    /// * `config` - 日志文件层配置
-    /// # 返回值
-    /// * `anyhow::Result<Self>` - 错误日志层结果
     pub fn new(config: &FileLayerConfig) -> anyhow::Result<Self> {
-        // 确保日志目录存在
         std::fs::create_dir_all(&config.log_dir)?;
 
-        // 创建错误日志文件追加器
         let appender = RollingFileAppender::new(
             config.rotation.clone(),
             &config.log_dir,
             &format!("{}_error.log", config.file_prefix),
         );
 
-        // 创建非阻塞写入器
         let (non_blocking, file_guard) = tracing_appender::non_blocking(appender);
 
-        // 构建只记录错误的日志层
         let layer = Box::new(
             fmt::layer()
                 .with_writer(non_blocking)
@@ -213,42 +192,31 @@ impl LayerBuilder {
         }
     }
 
-    /// 禁用控制台输出
     pub fn without_console(mut self) -> Self {
         self.console_enabled = false;
         self
     }
 
-    /// 禁用文件输出
     pub fn without_file(mut self) -> Self {
         self.file_enabled = false;
         self.error_file_enabled = false;
         self
     }
 
-    /// 禁用错误日志文件
     pub fn without_error_file(mut self) -> Self {
         self.error_file_enabled = false;
         self
     }
 
-    /// 构建所有层
-    /// 顺序为：控制台、文件、错误日志文件
-    /// # 返回值
-    /// * `anyhow::Result<(Vec<Box<dyn tracing_subscriber::Layer<Registry> + Send + Sync>>, Vec<WorkerGuard>)>` - 所有层和线程守卫
     pub fn build(self) -> anyhow::Result<(Vec<Box<dyn tracing_subscriber::Layer<Registry> + Send + Sync>>, Vec<WorkerGuard>)> {        
-        // dyn 表示这是一个trait 对象（动态分发）
-        // + Send + Sync 表示这个trait 对象的实现者可以安全地在多个线程之间传递
         let mut layers: Vec<Box<dyn tracing_subscriber::Layer<Registry> + Send + Sync>> = Vec::new();
         let mut guards: Vec<WorkerGuard> = Vec::new();
 
-        // 添加控制台层
         if self.console_enabled {
             let console_layer = ConsoleLayer::new(&self.config);
             layers.push(Box::new(console_layer.layer));
         }
 
-        // 添加文件层
         if self.file_enabled {
             let file_config = FileLayerConfig::from(&self.config);
             let file_layer = FileLayer::new(&file_config)?;
@@ -256,7 +224,6 @@ impl LayerBuilder {
             layers.push(Box::new(file_layer.layer));
         }
 
-        // 添加错误日志层
         if self.error_file_enabled {
             let file_config = FileLayerConfig::from(&self.config);
             let error_layer = ErrorLayer::new(&file_config)?;
@@ -277,7 +244,6 @@ mod tests {
     fn test_console_layer_creation() {
         let config = LogConfig::default();
         let _layer = ConsoleLayer::new(&config);
-        // 只要能创建成功就说明基本功能正常
     }
 
     #[test]
@@ -328,7 +294,7 @@ mod tests {
         let config = LogConfig::default();
         let builder = LayerBuilder::new(config);
         assert!(builder.console_enabled);
-        assert!(!builder.file_enabled); // 默认没有 log_file
+        assert!(!builder.file_enabled);
     }
 
     #[test]

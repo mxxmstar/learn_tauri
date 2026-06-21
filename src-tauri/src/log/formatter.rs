@@ -6,8 +6,6 @@ pub struct CustomFormatter;
 
 impl<S, N> FormatEvent<S, N> for CustomFormatter
 where
-    // S: tracing_subscriber::registry::LookupSpan<'a> + 'a,
-    // N: for<'writer> FormatFields<'writer> + 'static,
     S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
     N: for<'a> FormatFields<'a> + 'static,
 {
@@ -17,7 +15,6 @@ where
         mut writer: format::Writer<'_>,
         event: &tracing::Event<'_>,
     ) -> std::fmt::Result {
-        // 时间戳
         // 时间戳
         let timestamp = OffsetDateTime::now_utc();
         let format_description = time::format_description::parse("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]")
@@ -39,20 +36,17 @@ where
         }
 
         // 日志消息
-        ctx.field_format().format_fields(writer.by_ref(), event)?;  // 借用 writer 按照格式化器的格式写入日志消息
+        ctx.field_format().format_fields(writer.by_ref(), event)?;
         writeln!(writer)
     }
 }
 
-
-// cargo test -p media-ai-log formatter::tests::test_formatter_compiles
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_formatter_compiles() {
-        // 这个测试只是为了确保 formatter 能够编译
         let _formatter = CustomFormatter;
     }
 }

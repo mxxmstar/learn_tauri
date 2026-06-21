@@ -23,3 +23,22 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# ========== 日志核心 ==========
+tracing = "0.1"
+
+# ========== 日志处理 ==========
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "ansi"] }
+tracing-appender = "0.2"
+
+# ========== 时间处理 ==========
+time = { version = "0.3", features = ["formatting", "macros"] }
+
+# ========== 错误处理 ==========
+anyhow = "1"
+
+# ========== OpenGL 学习 ==========
+glfw = "0.60"
+gl = "0.14"
+
+# ========== 图片处理（用于纹理加载） ==========
+image = "0.25"

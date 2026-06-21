@@ -6,8 +6,8 @@ use tracing_subscriber::{
     util::SubscriberInitExt,
     Layer,
 };
-use crate::config::LogConfig;
-use crate::layers::LayerBuilder;
+use super::config::LogConfig;
+use super::layers::LayerBuilder;
 
 pub fn init_logger(config: &LogConfig) -> anyhow::Result<()> {
     let env_filter = EnvFilter::try_from_default_env()
