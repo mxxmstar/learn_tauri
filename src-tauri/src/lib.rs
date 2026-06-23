@@ -3,6 +3,7 @@
 pub mod log;
 pub mod dhcp;
 pub mod udp;
+pub mod tcp;
 pub mod http;
 
 #[tauri::command]

@@ -46,6 +46,20 @@ image = "0.25"
 # ========== 异步运行时 ==========
 tokio = { version = "1", features = ["full"] }
 
+# ========== 异步工具库 ==========
+# tokio-util 提供 codec（帧化编解码）、用于解决 TCP 粘包/半包问题
+#   - codec: 提供 LengthDelimitedCodec 等编解码器
+tokio-util = { version = "0.7", features = ["codec"] }
+
+# ========== 字节缓冲库 ==========
+# bytes 提供零拷贝的字节缓冲区，是 tokio-util codec 的输出类型
+bytes = "1"
+
+# ========== 异步抽象库 ==========
+# futures-util 提供 Stream / Sink 等 trait，用于 Framed 的读写分离
+#   - sink: 启用 SinkExt 和 split() 功能（Framed 读写分离必需）
+futures-util = { version = "0.3", features = ["sink"] }
+
 # ========== HTTP 服务框架 ==========
 # axum 是基于 tokio + hyper 的 Web 框架，由 tokio 团队维护
 # features 说明：
