@@ -5,6 +5,7 @@ pub mod dhcp;
 pub mod udp;
 pub mod tcp;
 pub mod http;
+pub mod someip;
 
 #[tauri::command]
 fn greet(name: &str) -> String {
