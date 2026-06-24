@@ -12,6 +12,7 @@ pub mod onvif;  // ONVIF 模块（设备发现、设备管理、设备能力）
 pub mod pcap;   // pcap 网络数据包捕获模块（网卡枚举、实时抓包）
 pub mod stonkam_avtp;  // Stonkam 自定义 AVTP 协议解析模块（EtherType 0x0022）
 pub mod avtp;          // 标准 AVTP 协议解析模块（IEEE 1722，EtherType 0x22F0）
+pub mod firmware;       // 固件处理模块（文件解密、ZIP 解压）
 
 use bcm::error::BcmError;
 use bcm::types::ConfigPair;
