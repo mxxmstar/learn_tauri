@@ -94,6 +94,7 @@ pub mod config;
 pub mod message;
 pub mod server;
 pub mod client;
+pub mod discovery;  // WS-Discovery 设备发现（ONVIF）
 
 // 重新导出常用类型，方便外部使用
 pub use config::{MulticastConfig, UdpClientConfig, UdpServerConfig};

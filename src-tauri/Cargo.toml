@@ -86,3 +86,19 @@ uuid = { version = "1", features = ["v4"] }
 #   - multipart: 支持 multipart/form-data 文件上传
 reqwest = { version = "0.12", features = ["json", "multipart"] }
 
+# ========== XML 处理（ONVIF SOAP 协议） ==========
+# quick-xml 是高性能 XML 读写库，用于构造和解析 ONVIF SOAP 消息
+# features 说明：
+#   - serialize: 支持将 Rust 结构体序列化为 XML
+#   - arbitrary: 支持更灵活的 XML 事件处理
+quick-xml = { version = "0.31", features = ["serialize", "arbitrary"] }
+
+# ========== Base64 编码（ONVIF WS-Security 认证） ==========
+# 用于 ONVIF WS-Security 用户名令牌的密码摘要（PasswordDigest）计算
+base64 = "0.22"
+
+# ========== HMAC 签名（ONVIF WS-Security 认证） ==========
+# 用于 ONVIF WS-Security 认证中的摘要计算（SHA1/HMAC）
+hmac = "0.12"
+sha1 = "0.10"
+

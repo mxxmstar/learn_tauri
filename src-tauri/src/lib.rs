@@ -8,10 +8,14 @@ pub mod someip;
 pub mod bcm;
 pub mod render;
 pub mod rtp;
+pub mod onvif;  // ONVIF 模块（设备发现、设备管理、设备能力）
 
 use bcm::error::BcmError;
 use bcm::types::ConfigPair;
 use serde::Serialize;
+use udp::discovery::DiscoveredDevice;
+use onvif::error::OnvifError;
+use onvif::{OnvifClient, OnvifDeviceInfo, OnvifCapabilities};
 
 #[derive(Serialize)]
 pub struct BcmResult<T: Serialize> {
@@ -35,6 +39,114 @@ fn err_msg(e: BcmError) -> BcmResult<String> {
         success: false,
         data: None,
         error: Some(e.to_string()),
+    }
+}
+
+// ============================================================
+// ONVIF 模块 Tauri 命令
+// ============================================================
+
+/// ONVIF 操作结果包装
+#[derive(Serialize)]
+pub struct OnvifResult<T: Serialize> {
+    pub success: bool,
+    pub data: Option<T>,
+    pub error: Option<String>,
+}
+
+impl<T: Serialize> OnvifResult<T> {
+    fn ok(data: T) -> Self {
+        Self {
+            success: true,
+            data: Some(data),
+            error: None,
+        }
+    }
+    fn err(e: OnvifError) -> Self {
+        Self {
+            success: false,
+            data: None,
+            error: Some(e.to_string()),
+        }
+    }
+}
+
+/// 设备发现（WS-Discovery）
+///
+/// 前端调用示例：
+/// ```typescript
+/// import { invoke } from '@tauri-apps/api';
+/// const devices = await invoke('discover_devices', { timeoutMs: 5000 });
+/// ```
+#[tauri::command]
+async fn discover_devices(timeout_ms: u64) -> OnvifResult<Vec<DiscoveredDevice>> {
+    match udp::discovery::discover(timeout_ms).await {
+        Ok(devices) => OnvifResult::ok(devices),
+        Err(e) => OnvifResult::err(e),
+    }
+}
+
+/// 获取设备基本信息
+///
+/// 前端调用示例：
+/// ```typescript
+/// const info = await invoke('get_device_info', {
+///     deviceUri: 'http://192.168.1.100/onvif/device_service',
+///     username: 'admin',
+///     password: '12345',
+/// });
+/// ```
+#[tauri::command]
+async fn get_device_info(
+    device_uri: String,
+    username: Option<String>,
+    password: Option<String>,
+) -> OnvifResult<OnvifDeviceInfo> {
+    // OnvifClient::connect() 是同步方法，直接调用
+    let client = match OnvifClient::connect(
+        &device_uri,
+        username.as_deref(),
+        password.as_deref(),
+    ) {
+        Ok(c) => c,
+        Err(e) => return OnvifResult::err(e),
+    };
+
+    match client.get_device_info().await {
+        Ok(info) => OnvifResult::ok(info),
+        Err(e) => OnvifResult::err(e),
+    }
+}
+
+/// 获取设备能力
+///
+/// 前端调用示例：
+/// ```typescript
+/// const caps = await invoke('get_capabilities', {
+///     deviceUri: 'http://192.168.1.100/onvif/device_service',
+///     username: 'admin',
+///     password: '12345',
+/// });
+/// ```
+#[tauri::command]
+async fn get_capabilities(
+    device_uri: String,
+    username: Option<String>,
+    password: Option<String>,
+) -> OnvifResult<OnvifCapabilities> {
+    // OnvifClient::connect() 是同步方法，直接调用
+    let client = match OnvifClient::connect(
+        &device_uri,
+        username.as_deref(),
+        password.as_deref(),
+    ) {
+        Ok(c) => c,
+        Err(e) => return OnvifResult::err(e),
+    };
+
+    match client.get_capabilities().await {
+        Ok(caps) => OnvifResult::ok(caps),
+        Err(e) => OnvifResult::err(e),
     }
 }
 
@@ -111,6 +223,10 @@ pub fn run() {
             read_config,
             health_check,
             full_install,
+            // ONVIF 模块命令
+            discover_devices,
+            get_device_info,
+            get_capabilities,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
