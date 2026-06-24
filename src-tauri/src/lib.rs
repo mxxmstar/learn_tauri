@@ -9,6 +9,7 @@ pub mod bcm;
 pub mod render;
 pub mod rtp;
 pub mod onvif;  // ONVIF 模块（设备发现、设备管理、设备能力）
+pub mod pcap;   // pcap 网络数据包捕获模块（网卡枚举、实时抓包）
 
 use bcm::error::BcmError;
 use bcm::types::ConfigPair;

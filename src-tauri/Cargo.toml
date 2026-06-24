@@ -86,6 +86,11 @@ uuid = { version = "1", features = ["v4"] }
 #   - multipart: 支持 multipart/form-data 文件上传
 reqwest = { version = "0.12", features = ["json", "multipart"] }
 
+# ========== pcap 网络数据包捕获 ==========
+# 封装 libpcap/Npcap（Windows），提供网卡枚举和实时抓包能力
+# 对应 StreamPlayer 中使用的 WinPcap 库
+pcap = "2"
+
 # ========== XML 处理（ONVIF SOAP 协议） ==========
 # quick-xml 是高性能 XML 读写库，用于构造和解析 ONVIF SOAP 消息
 # features 说明：
