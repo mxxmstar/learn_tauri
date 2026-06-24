@@ -6,6 +6,7 @@ pub mod http;
 pub mod someip;
 pub mod bcm;
 pub mod render;
+pub mod rtp;
 
 use bcm::error::BcmError;
 use bcm::types::ConfigPair;
