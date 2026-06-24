@@ -3,6 +3,7 @@ pub mod dhcp;
 pub mod udp;
 pub mod tcp;
 pub mod http;
+pub mod httpclient;
 pub mod someip;
 pub mod bcm;
 pub mod render;

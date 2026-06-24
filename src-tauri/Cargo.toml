@@ -79,3 +79,10 @@ tower-http = { version = "0.6", features = ["trace", "cors", "fs"] }
 # 用于生成请求 ID
 uuid = { version = "1", features = ["v4"] }
 
+# ========== HTTP 客户端 ==========
+# reqwest 是 Rust 最流行的 HTTP 客户端库，基于 tokio 异步运行时
+# features 说明：
+#   - json: 支持 JSON 请求/响应自动序列化/反序列化
+#   - multipart: 支持 multipart/form-data 文件上传
+reqwest = { version = "0.12", features = ["json", "multipart"] }
+
