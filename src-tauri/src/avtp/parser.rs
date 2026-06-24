@@ -36,8 +36,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::SystemTime;
 
-use crate::avtp::error::{Result, AvtpError};
-use crate::avtp::header::{AvtpHeader, AvtpSubtype, MjpegAvtpPacket};
+use crate::avtp::error::Result;
+use crate::avtp::header::{AvtpHeader, MjpegAvtpPacket};
 
 /// 标准 AVTP 协议解析器
 ///

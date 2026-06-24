@@ -33,7 +33,6 @@
  */
 
 use crate::stonkam_avtp::error::{Result, StonkamAvtpError};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Stonkam 自定义 AVTP 协议头部
 ///

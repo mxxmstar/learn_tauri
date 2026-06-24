@@ -59,7 +59,7 @@ pub enum AvtpSubtype {
     /// 未知子类型
     ///
     /// 不支持或未知的子类型。
-    Unknown(u8),
+    Unknown,
 }
 
 impl From<u8> for AvtpSubtype {
@@ -68,7 +68,7 @@ impl From<u8> for AvtpSubtype {
             0x00 => AvtpSubtype::Aaf,
             0x07 => AvtpSubtype::Mjpeg,
             0x05 => AvtpSubtype::H264,
-            _ => AvtpSubtype::Unknown(value),
+            _ => AvtpSubtype::Unknown,
         }
     }
 }
@@ -79,7 +79,7 @@ impl Into<u8> for AvtpSubtype {
             AvtpSubtype::Aaf => 0x00,
             AvtpSubtype::Mjpeg => 0x07,
             AvtpSubtype::H264 => 0x05,
-            AvtpSubtype::Unknown(v) => v,
+            AvtpSubtype::Unknown => 0xFF,  // 用一个特殊值表示未知
         }
     }
 }

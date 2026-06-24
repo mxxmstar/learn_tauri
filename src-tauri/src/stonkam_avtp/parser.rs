@@ -23,7 +23,6 @@
  * ```
  */
 
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::SystemTime;
 
