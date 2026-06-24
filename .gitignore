@@ -27,3 +27,4 @@ dist-ssr
 target/
 StreamPlayer/*
 StreamPlayer/
+QT_StreamPlayer/
