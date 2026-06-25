@@ -111,3 +111,9 @@ sha1 = "0.10"
 # 用于从 ZIP 文件中提取固件文件
 zip = "0.6"
 
+# ========== 串口通信 ==========
+# serialport 是 Rust 最流行的跨平台串口库
+# 支持 Windows（COM 端口）、Linux（/dev/tty*）、macOS（/dev/tty.*）
+# 提供同步串口访问能力，可配合 tokio::task::spawn_blocking 实现异步操作
+serialport = "4"
+

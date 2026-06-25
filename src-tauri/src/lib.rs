@@ -14,6 +14,7 @@ pub mod stonkam_avtp;  // Stonkam 自定义 AVTP 协议解析模块（EtherType 
 pub mod avtp;          // 标准 AVTP 协议解析模块（IEEE 1722，EtherType 0x22F0）
 pub mod firmware;       // 固件处理模块（文件解密、ZIP 解压）
 pub mod telnet;        // Telnet 模块（设备连接、命令执行、文件下载）
+pub mod serial;        // 串口通信模块（跨平台串口通信、协议解析）
 
 use bcm::error::BcmError;
 use bcm::types::ConfigPair;
@@ -21,7 +22,6 @@ use serde::Serialize;
 use udp::discovery::DiscoveredDevice;
 use onvif::error::OnvifError;
 use onvif::{OnvifClient, OnvifDeviceInfo, OnvifCapabilities};
-use tokio::sync::Mutex;
 use tauri::Emitter;
 
 #[derive(Serialize)]
@@ -406,6 +406,172 @@ async fn telnet_get_status() -> TelnetCmdResult<telnet::ConnectionStatus> {
     }
 }
 
+// ============================================================
+// 串口模块 Tauri 命令
+// ============================================================
+
+/// 全局串口客户端状态
+static SERIAL_CLIENT: std::sync::OnceLock<tokio::sync::Mutex<Option<serial::SerialClient>>> =
+    std::sync::OnceLock::new();
+
+/// 获取全局串口客户端
+fn get_serial_client() -> &'static tokio::sync::Mutex<Option<serial::SerialClient>> {
+    SERIAL_CLIENT.get_or_init(|| tokio::sync::Mutex::new(None))
+}
+
+/// 串口操作结果包装
+#[derive(serde::Serialize)]
+struct SerialCmdResult<T: serde::Serialize> {
+    success: bool,
+    data: Option<T>,
+    error: Option<String>,
+}
+
+impl<T: serde::Serialize> SerialCmdResult<T> {
+    fn ok(data: T) -> Self {
+        Self {
+            success: true,
+            data: Some(data),
+            error: None,
+        }
+    }
+
+    fn err(error: &str) -> Self {
+        Self {
+            success: false,
+            data: None,
+            error: Some(error.to_string()),
+        }
+    }
+}
+
+/// 列出所有可用的串口
+///
+/// 前端调用示例：
+/// ```typescript
+/// import { invoke } from '@tauri-apps/api';
+/// const ports = await invoke('serial_list_ports');
+/// ```
+#[tauri::command]
+async fn serial_list_ports() -> SerialCmdResult<Vec<String>> {
+    match serial::SerialClient::list_ports() {
+        Ok(ports) => SerialCmdResult::ok(ports),
+        Err(e) => SerialCmdResult::err(&e.to_string()),
+    }
+}
+
+/// 打开串口
+///
+/// 前端调用示例：
+/// ```typescript
+/// const result = await invoke('serial_open', {
+///     config: {
+///         portName: 'COM1',
+///         baudRate: 115200,
+///         dataBits: 8,
+///         stopBits: 1,
+///         parity: 'None',
+///         flowControl: 'None',
+///         timeoutMs: 1000,
+///     }
+/// });
+/// ```
+#[tauri::command]
+async fn serial_open(config: serial::SerialConfig) -> SerialCmdResult<()> {
+    let client = match serial::SerialClient::new(config) {
+        Ok(c) => c,
+        Err(e) => return SerialCmdResult::err(&e.to_string()),
+    };
+
+    match client.open().await {
+        Ok(_) => {
+            // 保存客户端到全局状态
+            let mut global = get_serial_client().lock().await;
+            *global = Some(client);
+            SerialCmdResult::ok(())
+        }
+        Err(e) => SerialCmdResult::err(&e.to_string()),
+    }
+}
+
+/// 关闭串口
+///
+/// 前端调用示例：
+/// ```typescript
+/// const result = await invoke('serial_close');
+/// ```
+#[tauri::command]
+async fn serial_close() -> SerialCmdResult<()> {
+    let mut global = get_serial_client().lock().await;
+    if let Some(client) = global.take() {
+        match client.close().await {
+            Ok(_) => SerialCmdResult::ok(()),
+            Err(e) => SerialCmdResult::err(&e.to_string()),
+        }
+    } else {
+        SerialCmdResult::ok(())
+    }
+}
+
+/// 写入数据
+///
+/// 前端调用示例：
+/// ```typescript
+/// const result = await invoke('serial_write', {
+///     data: Array.from(new TextEncoder().encode('hello'))
+/// });
+/// ```
+#[tauri::command]
+async fn serial_write(data: Vec<u8>) -> SerialCmdResult<usize> {
+    let global = get_serial_client().lock().await;
+    let client = match global.as_ref() {
+        Some(c) => c,
+        None => return SerialCmdResult::err("串口未打开，请先调用 serial_open"),
+    };
+
+    match client.write(&data).await {
+        Ok(n) => SerialCmdResult::ok(n),
+        Err(e) => SerialCmdResult::err(&e.to_string()),
+    }
+}
+
+/// 读取数据
+///
+/// 前端调用示例：
+/// ```typescript
+/// const result = await invoke('serial_read', { maxBytes: 1024 });
+/// ```
+#[tauri::command]
+async fn serial_read(max_bytes: usize) -> SerialCmdResult<Vec<u8>> {
+    let global = get_serial_client().lock().await;
+    let client = match global.as_ref() {
+        Some(c) => c,
+        None => return SerialCmdResult::err("串口未打开，请先调用 serial_open"),
+    };
+
+    match client.read(max_bytes).await {
+        Ok(data) => SerialCmdResult::ok(data),
+        Err(e) => SerialCmdResult::err(&e.to_string()),
+    }
+}
+
+/// 获取连接状态
+///
+/// 前端调用示例：
+/// ```typescript
+/// const status = await invoke('serial_get_status');
+/// ```
+#[tauri::command]
+async fn serial_get_status() -> SerialCmdResult<serial::ConnectionStatus> {
+    let global = get_serial_client().lock().await;
+    if let Some(client) = global.as_ref() {
+        let status = client.get_status().await;
+        SerialCmdResult::ok(status)
+    } else {
+        SerialCmdResult::ok(serial::ConnectionStatus::Disconnected)
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     if let Err(e) = log::init_logger_default() {
@@ -434,6 +600,13 @@ pub fn run() {
             telnet_download_file,
             telnet_disconnect,
             telnet_get_status,
+            // 串口模块命令
+            serial_list_ports,
+            serial_open,
+            serial_close,
+            serial_write,
+            serial_read,
+            serial_get_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
