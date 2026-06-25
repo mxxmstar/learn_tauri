@@ -117,3 +117,9 @@ zip = "0.6"
 # 提供同步串口访问能力，可配合 tokio::task::spawn_blocking 实现异步操作
 serialport = "4"
 
+# ========== Feature Flags ==========
+[features]
+default = ["decoder-rust"]
+decoder-rust = []  # 纯 Rust 解码器实现（MJPEG）
+decoder-ffi = []   # FFI 解码器实现（对接 C++/FFmpeg，支持 H264/H265）
+
