@@ -9,10 +9,11 @@ pub mod bcm;
 pub mod render;
 pub mod rtp;
 pub mod onvif;  // ONVIF 模块（设备发现、设备管理、设备能力）
-pub mod pcap;   // pcap 网络数据包捕获模块（网卡枚举、实时抓包）
+// pub mod pcap;   // pcap 网络数据包捕获模块（网卡枚举、实时抓包）-- 暂时注释，需要 wpcap.lib
 pub mod stonkam_avtp;  // Stonkam 自定义 AVTP 协议解析模块（EtherType 0x0022）
 pub mod avtp;          // 标准 AVTP 协议解析模块（IEEE 1722，EtherType 0x22F0）
 pub mod firmware;       // 固件处理模块（文件解密、ZIP 解压）
+pub mod telnet;        // Telnet 模块（设备连接、命令执行、文件下载）
 
 use bcm::error::BcmError;
 use bcm::types::ConfigPair;
@@ -20,6 +21,8 @@ use serde::Serialize;
 use udp::discovery::DiscoveredDevice;
 use onvif::error::OnvifError;
 use onvif::{OnvifClient, OnvifDeviceInfo, OnvifCapabilities};
+use tokio::sync::Mutex;
+use tauri::Emitter;
 
 #[derive(Serialize)]
 pub struct BcmResult<T: Serialize> {
@@ -210,6 +213,199 @@ fn greet(name: &str) -> String {
     greeting
 }
 
+// ============================================================
+// Telnet 模块 Tauri 命令
+// ============================================================
+
+/// 全局 Telnet 客户端状态
+static TELNET_CLIENT: std::sync::OnceLock<tokio::sync::Mutex<Option<telnet::TelnetClient>>> =
+    std::sync::OnceLock::new();
+
+/// 获取全局客户端
+fn get_telnet_client() -> &'static tokio::sync::Mutex<Option<telnet::TelnetClient>> {
+    TELNET_CLIENT.get_or_init(|| tokio::sync::Mutex::new(None))
+}
+
+/// Telnet 操作结果包装
+#[derive(serde::Serialize)]
+struct TelnetCmdResult<T: serde::Serialize> {
+    success: bool,
+    data: Option<T>,
+    error: Option<String>,
+}
+
+impl<T: serde::Serialize> TelnetCmdResult<T> {
+    fn ok(data: T) -> Self {
+        Self {
+            success: true,
+            data: Some(data),
+            error: None,
+        }
+    }
+
+    fn err(error: &str) -> Self {
+        Self {
+            success: false,
+            data: None,
+            error: Some(error.to_string()),
+        }
+    }
+}
+
+/// 连接设备
+///
+/// 前端调用示例：
+/// ```typescript
+/// import { invoke } from '@tauri-apps/api';
+/// const result = await invoke('telnet_connect', {
+///     config: {
+///         addr: '192.168.1.1:23',
+///         connectTimeoutMs: 10000,
+///         loginTimeoutMs: 15000,
+///         commandTimeoutMs: 30000,
+///     }
+/// });
+/// ```
+#[tauri::command]
+async fn telnet_connect(config: telnet::TelnetConfig) -> TelnetCmdResult<()> {
+    let client = match telnet::TelnetClient::new(config) {
+        Ok(c) => c,
+        Err(e) => return TelnetCmdResult::err(&e.to_string()),
+    };
+
+    match client.connect().await {
+        Ok(_) => {
+            // 保存客户端到全局状态
+            let mut global = get_telnet_client().lock().await;
+            *global = Some(client);
+            TelnetCmdResult::ok(())
+        }
+        Err(e) => TelnetCmdResult::err(&e.to_string()),
+    }
+}
+
+/// 登录设备
+///
+/// 前端调用示例：
+/// ```typescript
+/// const result = await invoke('telnet_login', {
+///     username: 'root',
+///     password: 'password'
+/// });
+/// ```
+#[tauri::command]
+async fn telnet_login(
+    username: String,
+    password: String,
+) -> TelnetCmdResult<telnet::LoginResult> {
+    let global = get_telnet_client().lock().await;
+    let client = match global.as_ref() {
+        Some(c) => c,
+        None => return TelnetCmdResult::err("未连接设备，请先调用 telnet_connect"),
+    };
+
+    match client.login(&username, &password).await {
+        Ok(result) => TelnetCmdResult::ok(result),
+        Err(e) => TelnetCmdResult::err(&e.to_string()),
+    }
+}
+
+/// 执行命令
+///
+/// 前端调用示例：
+/// ```typescript
+/// const result = await invoke('telnet_send_command', {
+///     command: 'ls -la'
+/// });
+/// ```
+#[tauri::command]
+async fn telnet_send_command(
+    command: String,
+) -> TelnetCmdResult<telnet::CommandResult> {
+    let global = get_telnet_client().lock().await;
+    let client = match global.as_ref() {
+        Some(c) => c,
+        None => return TelnetCmdResult::err("未连接设备，请先调用 telnet_connect"),
+    };
+
+    match client.execute_command(&command).await {
+        Ok(result) => TelnetCmdResult::ok(result),
+        Err(e) => TelnetCmdResult::err(&e.to_string()),
+    }
+}
+
+/// 下载文件
+///
+/// 前端调用示例：
+/// ```typescript
+/// const result = await invoke('telnet_download_file', {
+///     remotePath: '/etc/config',
+///     localPath: 'C:\\Users\\Downloads\\config.txt'
+/// });
+/// ```
+///
+/// 下载进度会通过事件 'telnet-download-progress' 发送到前端
+#[tauri::command]
+async fn telnet_download_file(
+    window: tauri::Window,
+    remote_path: String,
+    local_path: String,
+) -> TelnetCmdResult<telnet::FileDownloadResult> {
+    use crate::telnet::types::DownloadProgress;
+
+    let global = get_telnet_client().lock().await;
+    let client = match global.as_ref() {
+        Some(c) => c,
+        None => return TelnetCmdResult::err("未连接设备，请先调用 telnet_connect"),
+    };
+
+    // 创建进度回调函数，通过事件发送到前端
+    let progress_callback = Box::new(move |progress: DownloadProgress| {
+        let _ = window.emit("telnet-download-progress", &progress);
+    });
+
+    match client.download_file(&remote_path, &local_path, Some(progress_callback)).await {
+        Ok(result) => TelnetCmdResult::ok(result),
+        Err(e) => TelnetCmdResult::err(&e.to_string()),
+    }
+}
+
+/// 断开连接
+///
+/// 前端调用示例：
+/// ```typescript
+/// const result = await invoke('telnet_disconnect');
+/// ```
+#[tauri::command]
+async fn telnet_disconnect() -> TelnetCmdResult<()> {
+    let mut global = get_telnet_client().lock().await;
+    if let Some(client) = global.take() {
+        match client.disconnect().await {
+            Ok(_) => TelnetCmdResult::ok(()),
+            Err(e) => TelnetCmdResult::err(&e.to_string()),
+        }
+    } else {
+        TelnetCmdResult::ok(())
+    }
+}
+
+/// 获取连接状态
+///
+/// 前端调用示例：
+/// ```typescript
+/// const status = await invoke('telnet_get_status');
+/// ```
+#[tauri::command]
+async fn telnet_get_status() -> TelnetCmdResult<telnet::ConnectionStatus> {
+    let global = get_telnet_client().lock().await;
+    if let Some(client) = global.as_ref() {
+        let status = client.get_status().await;
+        TelnetCmdResult::ok(status)
+    } else {
+        TelnetCmdResult::ok(telnet::ConnectionStatus::Disconnected)
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     if let Err(e) = log::init_logger_default() {
@@ -231,6 +427,13 @@ pub fn run() {
             discover_devices,
             get_device_info,
             get_capabilities,
+            // Telnet 模块命令
+            telnet_connect,
+            telnet_login,
+            telnet_send_command,
+            telnet_download_file,
+            telnet_disconnect,
+            telnet_get_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -28,3 +28,18 @@ target/
 StreamPlayer/*
 StreamPlayer/
 QT_StreamPlayer/
+
+# Temporary files
+*.txt
+*.log
+build_output.txt
+check_build.ps1
+$null
+
+# Test files
+test_*
+*_test.rs
+telnet_test.rs
+
+# CodeBuddy
+.codebuddy/
