@@ -2,7 +2,7 @@
 //!
 //! 使用 image crate 实现 MJPEG 解码
 
-use image::DynamicImage;
+use image::{DynamicImage, ImageFormat};
 use crate::rtp::decoder::frame::{MediaFrame, MediaPacket};
 use crate::rtp::decoder::trait_::{DecodeError, DecodeResult, Decoder};
 use crate::rtp::decoder::types::{CodecType, PixelFormat};

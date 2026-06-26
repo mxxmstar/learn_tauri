@@ -122,4 +122,13 @@ serialport = "4"
 default = ["decoder-rust"]
 decoder-rust = []  # 纯 Rust 解码器实现（MJPEG）
 decoder-ffi = []   # FFI 解码器实现（对接 C++/FFmpeg，支持 H264/H265）
+recorder-ffi = []  # FFI 录像器实现（对接 C++/FFmpeg，支持 MP4/AVI）
+recorder-mp4 = ["recorder-ffi"]  # MP4 录像器（依赖 recorder-ffi）
+recorder-avi = ["recorder-ffi"]  # AVI 录像器（依赖 recorder-ffi）
+
+# ========== 示例程序配置 ==========
+[[bin]]
+name = "recorder_example"
+path = "src/bin/recorder_example.rs"
+required-features = ["recorder-mp4"]  # 需要启用 MP4 录像器 feature
 

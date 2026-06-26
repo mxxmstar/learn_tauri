@@ -51,6 +51,12 @@ impl From<RtpError> for DecodeError {
     }
 }
 
+impl From<String> for DecodeError {
+    fn from(err: String) -> Self {
+        DecodeError::DecodeFailed(err)
+    }
+}
+
 /// 统一的解码器 Trait
 ///
 /// 所有解码器实现此 trait，提供统一的解码接口

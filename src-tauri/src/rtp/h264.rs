@@ -517,12 +517,12 @@ mod tests {
                 version: 2,
                 padding: false,
                 extension: false,
-                csrc_count: 0,
                 marker,
                 payload_type: 96, // H.264 动态负载类型
-                sequence: 0,
+                sequence_number: 0,
                 timestamp,
                 ssrc: 0x12345678,
+                csrcs: vec![],
             },
             payload: Bytes::from(payload),
         }
@@ -562,17 +562,17 @@ mod tests {
         // FU header: 0x85 (S=1, E=0, R=0, Type=5=IDR)
         let part1 = vec![0x7C, 0x85, 0x01, 0x02, 0x03];
         let mut pkt1 = make_packet(part1, 2000, false);
-        pkt1.header.sequence = 1;
+        pkt1.header.sequence_number = 1;
 
         // FU header: 0x05 (S=0, E=0, R=0, Type=5=IDR)
         let part2 = vec![0x7C, 0x05, 0x04, 0x05, 0x06];
         let mut pkt2 = make_packet(part2, 2000, false);
-        pkt2.header.sequence = 2;
+        pkt2.header.sequence_number = 2;
 
         // FU header: 0x45 (S=0, E=1, R=0, Type=5=IDR)
         let part3 = vec![0x7C, 0x45, 0x07, 0x08, 0x09];
         let mut pkt3 = make_packet(part3, 2000, true);
-        pkt3.header.sequence = 3;
+        pkt3.header.sequence_number = 3;
 
         reassembler.push_packet(&pkt1);
         reassembler.push_packet(&pkt2);

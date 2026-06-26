@@ -15,6 +15,7 @@ pub mod avtp;          // 标准 AVTP 协议解析模块（IEEE 1722，EtherType
 pub mod firmware;       // 固件处理模块（文件解密、ZIP 解压）
 pub mod telnet;        // Telnet 模块（设备连接、命令执行、文件下载）
 pub mod serial;        // 串口通信模块（跨平台串口通信、协议解析）
+pub mod recorder;      // 录像模块（视频录制、MP4/AVI 封装）
 
 use bcm::error::BcmError;
 use bcm::types::ConfigPair;

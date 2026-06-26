@@ -3,7 +3,7 @@
 //! 预留接口，后续通过 FFI 对接 C++/FFmpeg
 
 use crate::rtp::decoder::frame::{MediaFrame, MediaPacket};
-use crate::rtp::decoder::trait::{DecodeError, DecodeResult, Decoder};
+use crate::rtp::decoder::trait_::{DecodeError, DecodeResult, Decoder};
 use crate::rtp::decoder::types::{CodecType, PixelFormat};
 
 /// H.265 解码器

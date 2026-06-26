@@ -38,12 +38,42 @@ pub type DecoderHandle = *mut c_void;
 /// 解码后帧的 C 结构（与 C++ 端对齐）
 #[repr(C)]
 pub struct DecodedFrame {
+    /// 媒体类型（0=Video, 1=Audio）
+    pub media_type: i32,
+    /// 编解码器类型
+    pub codec_type: i32,
+
+    // ========== 视频字段 ==========
     /// 像素格式
     pub pixel_format: i32,
     /// 宽度
     pub width: i32,
     /// 高度
     pub height: i32,
+    ///  stride
+    pub stride: [i32; 8],
+    /// 平面偏移
+    pub plane_offset: [i32; 8],
+    /// 平面数量
+    pub plane_count: i32,
+
+    // ========== 音频字段 ==========
+    /// 采样格式
+    pub sample_format: i32,
+    /// 采样率
+    pub sample_rate: i32,
+    /// 声道数
+    pub channels: i32,
+    /// 声道布局
+    pub channel_layout: u64,
+    /// 每声道采样点数
+    pub nb_samples: i32,
+    /// 每采样字节数
+    pub bytes_per_sample: i32,
+    /// 是否为 planar 格式
+    pub planar: bool,
+
+    // ========== 数据字段 ==========
     /// 数据指针
     pub data: *const u8,
     /// 数据大小
@@ -51,6 +81,8 @@ pub struct DecodedFrame {
     /// 时间戳
     pub pts: i64,
     pub dts: i64,
+    /// 帧持续时间
+    pub duration: i64,
     /// 是否为关键帧
     pub keyframe: bool,
 }
@@ -81,22 +113,51 @@ pub struct FfiDecoder {
     handle: DecoderHandle,
     /// 编解码器类型
     codec_type: i32,
-    /// 输出像素格式
+    /// 输出像素格式（视频）
     pixel_format: i32,
+    /// 输出采样格式（音频）
+    sample_format: i32,
+    /// 媒体类型
+    media_type: i32,
 }
 
+// SAFETY: FfiDecoder 的 handle 是 C++ 端解码器实例的指针。
+// 假设 C++ 端实现是线程安全的（或者解码器在同一时间只被一个线程使用），
+// 则 FfiDecoder 可以安全地跨线程传递。
+// 注意：FfiDecoder 不同步，不应在多线程中同时使用同一个实例。
+unsafe impl Send for FfiDecoder {}
+
 impl FfiDecoder {
-    /// 创建新的 FFI 解码器
-    pub fn new(codec_type: i32, pixel_format: i32) -> Result<Self, String> {
+    /// 创建新的视频 FFI 解码器
+    pub fn new_video(codec_type: i32, pixel_format: i32) -> Result<Self, String> {
         #[cfg(feature = "decoder-ffi")]
         {
             // TODO: 调用 C++ 端的 decoder_create 函数
-            // let handle = unsafe { ffi::decoder_create(codec_type, pixel_format) };
+            // let handle = unsafe { ffi::decoder_create(codec_type, pixel_format, 0) };
             // if handle.is_null() {
-            //     return Err("failed to create decoder".to_string());
+            //     return Err("failed to create video decoder".to_string());
             // }
-            // Ok(Self { handle, codec_type, pixel_format })
+            // Ok(Self { handle, codec_type, pixel_format, sample_format: 0, media_type: 0 })
             return Err("FFI decoder not implemented yet".to_string());
+        }
+
+        #[cfg(not(feature = "decoder-ffi"))]
+        {
+            Err("FFI decoder requires 'decoder-ffi' feature".to_string())
+        }
+    }
+
+    /// 创建新的音频 FFI 解码器
+    pub fn new_audio(codec_type: i32, sample_format: i32) -> Result<Self, String> {
+        #[cfg(feature = "decoder-ffi")]
+        {
+            // TODO: 调用 C++ 端的 decoder_create 函数
+            // let handle = unsafe { ffi::decoder_create(codec_type, sample_format, 1) };
+            // if handle.is_null() {
+            //     return Err("failed to create audio decoder".to_string());
+            // }
+            // Ok(Self { handle, codec_type, pixel_format: 0, sample_format, media_type: 1 })
+            return Err("FFI audio decoder not implemented yet".to_string());
         }
 
         #[cfg(not(feature = "decoder-ffi"))]
@@ -193,6 +254,66 @@ impl Drop for FfiDecoder {
     }
 }
 
+impl DecodedFrame {
+    /// 将 DecodedFrame 转换为 MediaFrame
+    pub fn to_media_frame(&self, data: bytes::Bytes) -> crate::rtp::decoder::frame::MediaFrame {
+        use crate::rtp::decoder::types::{MediaType, PixelFormat, SampleFormat};
+        use crate::rtp::decoder::frame::MediaFrame;
+
+        let media_type = MediaType::from_u32(self.media_type as u32);
+
+        if media_type == MediaType::Video {
+            // 视频帧
+            MediaFrame {
+                media_type,
+                pixel_format: PixelFormat::from_u32(self.pixel_format as u32),
+                width: self.width,
+                height: self.height,
+                stride: self.stride,
+                plane_offset: self.plane_offset,
+                plane_count: self.plane_count,
+                sample_format: SampleFormat::Unknown,
+                sample_rate: 0,
+                channels: 0,
+                channel_layout: 0,
+                nb_samples: 0,
+                bytes_per_sample: 0,
+                planar: false,
+                pts: self.pts,
+                dts: self.dts,
+                duration: self.duration,
+                keyframe: self.keyframe,
+                data,
+                backend: None,
+            }
+        } else {
+            // 音频帧
+            MediaFrame {
+                media_type,
+                pixel_format: PixelFormat::Unknown,
+                width: 0,
+                height: 0,
+                stride: [0; 8],
+                plane_offset: [0; 8],
+                plane_count: 0,
+                sample_format: SampleFormat::from_u32(self.sample_format as u32),
+                sample_rate: self.sample_rate,
+                channels: self.channels,
+                channel_layout: self.channel_layout,
+                nb_samples: self.nb_samples,
+                bytes_per_sample: self.bytes_per_sample,
+                planar: self.planar,
+                pts: self.pts,
+                dts: self.dts,
+                duration: self.duration,
+                keyframe: self.keyframe,
+                data,
+                backend: None,
+            }
+        }
+    }
+}
+
 /// 声明外部 C 函数（C++ 端实现）
 #[cfg(feature = "decoder-ffi")]
 #[allow(non_snake_case)]
@@ -234,7 +355,7 @@ mod tests {
     #[test]
     fn test_ffi_decoder_new() {
         // 默认应该返回错误（未实现或 feature 未启用）
-        let result = FfiDecoder::new(0, 1);
+        let result = FfiDecoder::new_video(0, 1);
         assert!(result.is_err());
     }
 }

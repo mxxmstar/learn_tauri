@@ -1,11 +1,15 @@
 //! 解码器模块
 //!
 //! 提供统一的解码器接口，支持多种编解码器
+//! 包括视频（H.264, H.265, MJPEG）和音频（AAC, MP3, Opus, G.711）
 
 // 模块声明
 pub mod types;
 pub mod frame;
 mod trait_;
+
+// 音频解码器模块
+pub mod audio;
 
 // 条件编译模块
 #[cfg(feature = "decoder-rust")]
@@ -20,12 +24,23 @@ mod ffi;
 
 // 公开导出
 pub use types::{
-    MediaType, CodecType, PixelFormat, BackendHandle,
+    MediaType, CodecType, PixelFormat, SampleFormat, BackendHandle,
 };
 pub use frame::{MediaPacket, MediaFrame};
 pub use trait_::{
     DecodeError, DecodeResult, Decoder, DecoderInfo, DecoderStats, StatsDecoder,
 };
+
+// 音频解码器导出
+// G.711 解码器（纯 Rust，始终可用）
+pub use audio::{G711ADecoder, G711UDecoder};
+// AAC/MP3/Opus 解码器（需要 FFI）
+#[cfg(feature = "decoder-ffi")]
+pub use audio::AacDecoder;
+#[cfg(feature = "decoder-ffi")]
+pub use audio::Mp3Decoder;
+#[cfg(feature = "decoder-ffi")]
+pub use audio::OpusDecoder;
 
 // 条件导出
 #[cfg(feature = "decoder-rust")]
@@ -57,6 +72,7 @@ pub use ffi::{FfiDecoder, DecoderHandle, DecodedFrame, FfiErrorCode};
 /// ```
 pub fn create_decoder(codec: CodecType) -> DecodeResult<Box<dyn Decoder + Send>> {
     match codec {
+        // 视频编解码器
         CodecType::MJPEG => {
             #[cfg(feature = "decoder-rust")]
             {
@@ -86,6 +102,12 @@ pub fn create_decoder(codec: CodecType) -> DecodeResult<Box<dyn Decoder + Send>>
             {
                 Err(DecodeError::UnsupportedCodec(codec))
             }
+        }
+        // 音频编解码器
+        // G.711 解码器始终可用（纯 Rust）
+        // AAC/MP3/Opus 解码器需要 decoder-ffi feature
+        CodecType::AAC | CodecType::MP3 | CodecType::OPUS | CodecType::G711A | CodecType::G711U => {
+            audio::create_audio_decoder(codec)
         }
         _ => Err(DecodeError::UnsupportedCodec(codec)),
     }
@@ -196,6 +218,7 @@ impl DecoderConfig {
 /// 检查指定编解码器是否支持
 pub fn is_codec_supported(codec: CodecType) -> bool {
     match codec {
+        // 视频编解码器
         CodecType::MJPEG => {
             #[cfg(feature = "decoder-rust")]
             {
@@ -216,6 +239,20 @@ pub fn is_codec_supported(codec: CodecType) -> bool {
                 false
             }
         }
+        // 音频编解码器
+        // G.711 解码器始终支持（纯 Rust）
+        CodecType::G711A | CodecType::G711U => true,
+        // AAC/MP3/Opus 解码器需要 decoder-ffi feature
+        CodecType::AAC | CodecType::MP3 | CodecType::OPUS => {
+            #[cfg(feature = "decoder-ffi")]
+            {
+                true
+            }
+            #[cfg(not(feature = "decoder-ffi"))]
+            {
+                false
+            }
+        }
         _ => false,
     }
 }
@@ -224,6 +261,7 @@ pub fn is_codec_supported(codec: CodecType) -> bool {
 pub fn supported_codecs() -> Vec<CodecType> {
     let mut codecs = Vec::new();
 
+    // 视频编解码器
     #[cfg(feature = "decoder-rust")]
     {
         codecs.push(CodecType::MJPEG);
@@ -233,6 +271,19 @@ pub fn supported_codecs() -> Vec<CodecType> {
     {
         codecs.push(CodecType::H264);
         codecs.push(CodecType::H265);
+    }
+
+    // 音频编解码器
+    // G.711 解码器始终可用（纯 Rust）
+    codecs.push(CodecType::G711A);
+    codecs.push(CodecType::G711U);
+    
+    // AAC/MP3/Opus 解码器需要 decoder-ffi feature
+    #[cfg(feature = "decoder-ffi")]
+    {
+        codecs.push(CodecType::AAC);
+        codecs.push(CodecType::MP3);
+        codecs.push(CodecType::OPUS);
     }
 
     codecs
