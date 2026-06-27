@@ -390,6 +390,34 @@ async fn telnet_disconnect() -> TelnetCmdResult<()> {
     }
 }
 
+/// 挂载虚拟机 NFS 目录到设备
+///
+/// 前端调用示例：
+/// ```typescript
+/// const result = await invoke('telnet_mount_vm', {
+///     vmIp: '192.168.66.11',
+///     nfsPath: '/nfs',
+///     mountPath: '/mnt/nfs'
+/// });
+/// ```
+#[tauri::command]
+async fn telnet_mount_vm(
+    vm_ip: String,
+    nfs_path: String,
+    mount_path: String,
+) -> TelnetCmdResult<telnet::MountResult> {
+    let global = get_telnet_client().lock().await;
+    let client = match global.as_ref() {
+        Some(c) => c,
+        None => return TelnetCmdResult::err("未连接设备，请先调用 telnet_connect"),
+    };
+
+    match client.mount_vm(&vm_ip, &nfs_path, &mount_path).await {
+        Ok(result) => TelnetCmdResult::ok(result),
+        Err(e) => TelnetCmdResult::err(&e.to_string()),
+    }
+}
+
 /// 获取连接状态
 ///
 /// 前端调用示例：
@@ -601,6 +629,7 @@ pub fn run() {
             telnet_download_file,
             telnet_disconnect,
             telnet_get_status,
+            telnet_mount_vm,
             // 串口模块命令
             serial_list_ports,
             serial_open,

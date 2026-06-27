@@ -581,6 +581,89 @@ impl TelnetClient {
         ))
     }
 
+    /// 挂载 NFS 虚拟机目录到设备
+    ///
+    /// 执行挂载命令流程：
+    /// 1. `mkdir -p {mount_path}` - 创建挂载目录
+    /// 2. `mount -t nfs -o nolock {vm_ip}:{nfs_path} {mount_path}` - 挂载 NFS
+    ///
+    /// # 参数
+    /// * `vm_ip` - 虚拟机 IP 地址
+    /// * `nfs_path` - NFS 导出路径（默认为 "/nfs"）
+    /// * `mount_path` - 设备上的挂载点路径（默认为 "/mnt/nfs"）
+    ///
+    /// # 返回值
+    /// 返回 Result，成功时包含 MountResult
+    pub async fn mount_vm(
+        &self,
+        vm_ip: &str,
+        nfs_path: &str,
+        mount_path: &str,
+    ) -> TelnetResult<crate::telnet::types::MountResult> {
+        use crate::telnet::types::MountResult;
+
+        // 检查连接状态
+        if !self.is_logged_in().await {
+            return Err(TelnetError::NotConnected(
+                "请先连接并登录设备".to_string(),
+            ));
+        }
+
+        // 步骤 1: 创建挂载目录
+        let mkdir_cmd = format!("mkdir -p {}", mount_path);
+        let mkdir_result = self.execute_command(&mkdir_cmd).await.map_err(|e| {
+            TelnetError::CommandError(format!("创建挂载目录失败: {}", e))
+        })?;
+
+        // 步骤 2: 执行挂载
+        let mount_cmd = format!(
+            "mount -t nfs -o nolock {}:{} {}",
+            vm_ip, nfs_path, mount_path
+        );
+        let mount_result = match self.execute_command(&mount_cmd).await {
+            Ok(result) => result,
+            Err(e) => {
+                return Err(TelnetError::CommandError(format!("NFS 挂载失败: {}", e)));
+            }
+        };
+
+        // 合并输出
+        let combined_output = format!(
+            "创建目录:\n{}\n挂载命令: {}\n输出:\n{}",
+            mkdir_result.output, mount_cmd, mount_result.output
+        );
+
+        // 检查输出中是否包含错误
+        if mount_result.output.to_lowercase().contains("error")
+            || mount_result.output.to_lowercase().contains("failed")
+            || mount_result.output.to_lowercase().contains("mount.nfs:")
+                && !mount_result.output.to_lowercase().contains("already mounted")
+        {
+            return Ok(MountResult::failure(vm_ip, mount_path, &combined_output));
+        }
+
+        // 验证挂载是否成功
+        let check_cmd = format!("mount | grep {}", mount_path);
+        match self.execute_command(&check_cmd).await {
+            Ok(check_result) => {
+                if check_result.output.contains(mount_path) {
+                    Ok(MountResult::success(vm_ip, mount_path, &combined_output))
+                } else {
+                    // 挂载可能失败，但没检测到明显的错误信息
+                    Ok(MountResult::failure(
+                        vm_ip,
+                        mount_path,
+                        &format!("挂载后未检测到挂载点:\n{}", check_result.output),
+                    ))
+                }
+            }
+            Err(_) => {
+                // 无法验证，但 mount 命令本身没有报错，视为成功
+                Ok(MountResult::success(vm_ip, mount_path, &combined_output))
+            }
+        }
+    }
+
     /// 断开连接
     ///
     /// 关闭 TCP 连接并更新状态。

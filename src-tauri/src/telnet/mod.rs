@@ -82,5 +82,5 @@ pub use error::{TelnetError, TelnetResult};
 pub use config::TelnetConfig;
 pub use types::{
     CommandResult, ConnectionStatus, DeviceInfo, DownloadProgress, FileDownloadResult,
-    LoginResult, TelnetOpResult,
+    LoginResult, MountResult, TelnetOpResult,
 };

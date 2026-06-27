@@ -138,6 +138,43 @@ impl Default for ConnectionStatus {
     }
 }
 
+/// NFS 挂载结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MountResult {
+    /// 是否成功
+    pub success: bool,
+    /// 虚拟机 IP
+    pub vm_ip: String,
+    /// 本地挂载路径
+    pub mount_path: String,
+    /// 执行过程中的输出
+    pub output: String,
+    /// 错误信息
+    pub error: Option<String>,
+}
+
+impl MountResult {
+    pub fn success(vm_ip: &str, mount_path: &str, output: &str) -> Self {
+        Self {
+            success: true,
+            vm_ip: vm_ip.to_string(),
+            mount_path: mount_path.to_string(),
+            output: output.to_string(),
+            error: None,
+        }
+    }
+
+    pub fn failure(vm_ip: &str, mount_path: &str, error: &str) -> Self {
+        Self {
+            success: false,
+            vm_ip: vm_ip.to_string(),
+            mount_path: mount_path.to_string(),
+            output: String::new(),
+            error: Some(error.to_string()),
+        }
+    }
+}
+
 /// 设备信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceInfo {
