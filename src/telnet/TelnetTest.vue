@@ -77,6 +77,22 @@
         />
       </t-card>
 
+      <!-- NFS 挂载 -->
+      <t-divider />
+      <t-form layout="inline">
+        <t-form-item label="VM IP">
+          <t-input v-model="vmIp" placeholder="192.168.66.11" style="width: 140px" />
+        </t-form-item>
+        <t-form-item label="挂载路径">
+          <t-input v-model="mountPath" placeholder="/mnt/nfs" style="width: 140px" />
+        </t-form-item>
+        <t-form-item>
+          <t-button theme="primary" :loading="mounting" @click="handleMount">
+            挂载
+          </t-button>
+        </t-form-item>
+      </t-form>
+
       <!-- 文件下载 -->
       <t-form layout="inline">
         <t-form-item label="远程路径">
@@ -117,6 +133,7 @@ import {
   downloadFile,
   disconnect,
   getStatus,
+  mountVm,
   DEFAULT_CONFIG,
   type TelnetConfig,
   type ConnectionStatus,
@@ -141,6 +158,11 @@ const disconnecting = ref(false);
 const commanding = ref(false);
 const downloading = ref(false);
 const currentStatus = ref<ConnectionStatus>('Disconnected');
+
+// NFS 挂载
+const vmIp = ref('192.168.66.11');
+const mountPath = ref('/mnt/nfs');
+const mounting = ref(false);
 
 // 文件下载
 const remotePath = ref('/etc/hostname');
@@ -275,6 +297,30 @@ async function handleDownload() {
     MessagePlugin.error(`下载异常: ${e.message || e}`);
   } finally {
     downloading.value = false;
+  }
+}
+
+// 挂载 VM
+async function handleMount() {
+  if (!vmIp.value) {
+    MessagePlugin.warning('请输入 VM IP');
+    return;
+  }
+
+  mounting.value = true;
+  try {
+    const result = await mountVm(vmIp.value, '/nfs', mountPath.value);
+    if (result.success && result.data?.success) {
+      output.value += `\n$ mount ${vmIp.value}:/nfs -> ${mountPath.value}\n${result.data.output}`;
+      MessagePlugin.success('挂载成功');
+    } else {
+      output.value += `\n$ mount ${vmIp.value}:/nfs -> ${mountPath.value} (失败)\n${result.data?.output || result.error}`;
+      MessagePlugin.error(`挂载失败: ${result.data?.error || result.error}`);
+    }
+  } catch (e: any) {
+    MessagePlugin.error(`挂载异常: ${e.message || e}`);
+  } finally {
+    mounting.value = false;
   }
 }
 

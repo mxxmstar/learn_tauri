@@ -13,6 +13,7 @@ import type {
   FileDownloadResult,
   DownloadProgress,
   ConnectionStatus,
+  MountResult,
   TelnetCmdResult,
 } from './types';
 
@@ -141,6 +142,27 @@ export async function downloadFile(
  */
 export async function disconnect(): Promise<TelnetCmdResult<void>> {
   return invoke('telnet_disconnect');
+}
+
+/**
+ * 挂载虚拟机 NFS 目录到设备
+ *
+ * @param vmIp - 虚拟机 IP
+ * @param nfsPath - NFS 导出路径（默认 '/nfs'）
+ * @param mountPath - 设备挂载点（默认 '/mnt/nfs'）
+ * @returns 挂载结果
+ *
+ * @example
+ * ```typescript
+ * const result = await mountVm('192.168.66.11', '/nfs', '/mnt/nfs');
+ * ```
+ */
+export async function mountVm(
+  vmIp: string,
+  nfsPath: string = '/nfs',
+  mountPath: string = '/mnt/nfs',
+): Promise<TelnetCmdResult<MountResult>> {
+  return invoke('telnet_mount_vm', { vmIp, nfsPath, mountPath });
 }
 
 /**

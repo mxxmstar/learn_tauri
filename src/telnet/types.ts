@@ -99,6 +99,22 @@ export interface DownloadProgress {
 }
 
 /**
+ * NFS 挂载结果
+ */
+export interface MountResult {
+  /** 是否成功 */
+  success: boolean;
+  /** 虚拟机 IP */
+  vmIp: string;
+  /** 本地挂载路径 */
+  mountPath: string;
+  /** 执行过程中的输出 */
+  output: string;
+  /** 错误信息 */
+  error?: string;
+}
+
+/**
  * Tauri 命令返回结果
  */
 export interface TelnetCmdResult<T> {
