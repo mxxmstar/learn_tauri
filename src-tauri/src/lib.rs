@@ -17,6 +17,8 @@ pub mod telnet;        // Telnet 模块（设备连接、命令执行、文件�
 pub mod serial;        // 串口通信模块（跨平台串口通信、协议解析）
 pub mod recorder;      // 录像模块（视频录制、MP4/AVI 封装）
 
+pub mod ssh_v3;        // SSH / SFTP 远程文件管理模块（第三版实现）
+pub use ssh_v3 as ssh; // 对外继续保留 `ssh` 模块名，避免调用方受影响
 use bcm::error::BcmError;
 use bcm::types::ConfigPair;
 use serde::Serialize;
@@ -610,6 +612,7 @@ pub fn run() {
     log_info!("Tauri application starting...");
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             greet,
@@ -630,6 +633,19 @@ pub fn run() {
             telnet_disconnect,
             telnet_get_status,
             telnet_mount_vm,
+            // SSH / SFTP 远程文件管理命令
+            ssh::ssh_connect,
+            ssh::ssh_probe_host,
+            ssh::ssh_disconnect,
+            ssh::sftp_list_directory,
+            ssh::sftp_get_properties,
+            ssh::sftp_create_directory,
+            ssh::sftp_rename_path,
+            ssh::sftp_delete_path,
+            ssh::sftp_suggest_download_path,
+            ssh::sftp_download_file,
+            ssh::sftp_upload_file,
+            ssh::sftp_open_text_file,
             // 串口模块命令
             serial_list_ports,
             serial_open,

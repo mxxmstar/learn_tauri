@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
-
+default-run = "learn_tauri"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
@@ -21,6 +21,7 @@ cc = "1"
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
@@ -116,6 +117,14 @@ zip = "0.6"
 # 支持 Windows（COM 端口）、Linux（/dev/tty*）、macOS（/dev/tty.*）
 # 提供同步串口访问能力，可配合 tokio::task::spawn_blocking 实现异步操作
 serialport = "4"
+
+# ========== SSH / SFTP 远程文件管理 ==========
+# russh：纯 Rust SSH 客户端实现。
+# 这里显式关闭默认特性，避免默认走 `aws-lc-rs`，因为它在当前 Windows 环境下会额外要求 NASM。
+# 改为启用 `ring` + `rsa` + `flate2`，更适合当前项目的本地编译环境。
+russh = { version = "0.61.2", default-features = false, features = ["ring", "rsa", "flate2"] }
+# russh-sftp：基于 russh 的 SFTP 客户端实现，用于目录遍历、文件属性读取与文件下载
+russh-sftp = "2.3.0"
 
 # ========== Feature Flags ==========
 [features]

@@ -1,19 +1,12 @@
 import { createRouter, createWebHashHistory } from "vue-router";
 import FilePage from "../views/FilePage.vue";
+import SshFile from "../views/SshFile.vue";
 import HelpPage from "../views/HelpPage.vue";
 import SomeipPlayer from "../someip-player/SomeipPlayer.vue";
 import DhcpServer from "../camera_tools/DhcpServer.vue";
 
 /**
- * 路由配置
- *
- * 菜单结构：
- *   文件      → /file
- *   页面 ▾
- *     └── SOME/IP Player  → /someip-player
- *   工具 ▾
- *     └── DHCP Server     → /dhcp-server
- *   帮助      → /help
+ * 路由配置。
  */
 const routes = [
   {
@@ -24,6 +17,11 @@ const routes = [
     path: "/file",
     name: "file",
     component: FilePage,
+  },
+  {
+    path: "/ssh",
+    name: "ssh",
+    component: SshFile,
   },
   {
     path: "/someip-player",

@@ -1,123 +1,173 @@
 <script setup lang="ts">
-import { ref, computed, watch } from "vue";
-import { useRouter, useRoute } from "vue-router";
+import { computed, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { LeftOutlined, RightOutlined } from "@ant-design/icons-vue";
 import { useDhcpServerStore } from "./stores/dhcpServerStore";
 
+/**
+ * 应用主壳组件。
+ *
+ * 这一层只负责三件事：
+ * 1. 展示顶部菜单栏；
+ * 2. 维护一个轻量级的页面访问历史，支持前进 / 后退；
+ * 3. 渲染当前路由页面。
+ *
+ * 业务页面本身放到各自的路由组件中处理，避免这里承担过多业务逻辑。
+ */
 const router = useRouter();
 const route = useRoute();
 const { dhcpServerRunning } = useDhcpServerStore();
 
 /**
- * 当前选中的菜单项 key（从路由路径中提取首段）
- * 例如 /dhcp-server → dhcp-server
+ * 当前选中的菜单 key。
+ *
+ * 我们优先使用路由 name，这样即使未来页面路径调整，
+ * 只要路由 name 不变，菜单高亮逻辑也不需要跟着改。
  */
-const currentMenu = computed(() => route.path.slice(1));
+const currentMenu = computed(() => String(route.name ?? ""));
 
-// 历史记录栈，用于自定义前进/后退导航
-const history = ref<string[]>([]);
+/**
+ * 轻量历史栈。
+ *
+ * 这里不是替代浏览器历史，而是为了配合顶部自定义前进 / 后退按钮，
+ * 让应用内部跳转体验更像桌面工具。
+ */
+const historyStack = ref<string[]>([]);
 const historyIndex = ref(-1);
 const canGoBack = ref(false);
 const canGoForward = ref(false);
 
 /**
- * 监听路由变化，当使用浏览器/按钮前进/后退时，同步更新历史栈状态
+ * 根据当前索引刷新前进 / 后退按钮状态。
+ */
+function syncHistoryAbility() {
+  canGoBack.value = historyIndex.value > 0;
+  canGoForward.value = historyIndex.value >= 0 && historyIndex.value < historyStack.value.length - 1;
+}
+
+/**
+ * 监听路由变化，把外部触发的跳转也同步到自定义历史栈中。
+ *
+ * 例如：
+ * - 用户点击浏览器后退；
+ * - 代码里主动调用 router.push；
+ * - 应用首次进入默认页面。
  */
 watch(
-  () => route.path,
-  (path) => {
-    const key = path.slice(1);
-    // 只有当路由变化不是由 handleMenuClick 触发时才同步（避免重复记录）
-    if (history.value[historyIndex.value] !== key) {
-      // 如果是通过 goBack/goForward 触发的，历史栈中应该已有该 key
-      const idx = history.value.indexOf(key);
-      if (idx !== -1) {
-        historyIndex.value = idx;
-      } else {
-        // 未知导航（如直接输入 URL），重置历史栈
-        history.value = [key];
-        historyIndex.value = 0;
-      }
+  () => route.name,
+  (routeName) => {
+    const key = String(routeName ?? "");
+    if (!key) {
+      return;
     }
-    canGoBack.value = historyIndex.value > 0;
-    canGoForward.value = historyIndex.value < history.value.length - 1;
+
+    /**
+     * 如果当前历史指针已经在该页面，就不重复记录。
+     */
+    if (historyStack.value[historyIndex.value] === key) {
+      syncHistoryAbility();
+      return;
+    }
+
+    /**
+     * 如果新页面恰好是历史栈里已有的相邻项，
+     * 说明这次更像是前进 / 后退行为，直接移动指针即可。
+     */
+    const previousKey = historyStack.value[historyIndex.value - 1];
+    const nextKey = historyStack.value[historyIndex.value + 1];
+
+    if (key === previousKey) {
+      historyIndex.value -= 1;
+      syncHistoryAbility();
+      return;
+    }
+
+    if (key === nextKey) {
+      historyIndex.value += 1;
+      syncHistoryAbility();
+      return;
+    }
+
+    /**
+     * 其余情况按“新导航”处理：
+     * - 如果之前后退过，需要先截断后面的分支历史；
+     * - 再把当前页面压入历史栈尾部。
+     */
+    if (historyIndex.value < historyStack.value.length - 1) {
+      historyStack.value = historyStack.value.slice(0, historyIndex.value + 1);
+    }
+
+    historyStack.value.push(key);
+    historyIndex.value = historyStack.value.length - 1;
+    syncHistoryAbility();
   },
+  { immediate: true },
 );
 
 /**
- * 点击菜单项时触发：记录历史 + 路由跳转
- * @param menuItem - 点击的菜单项对象，包含 key 属性
+ * 菜单点击处理。
+ *
+ * 这里直接按路由 name 导航，页面之间的具体参数暂不涉及。
  */
-const handleMenuClick = (menuItem: { key: string }) => {
-  const key = menuItem.key;
+function handleMenuClick(menuItem: { key: string }) {
+  router.push({ name: menuItem.key });
+}
 
-  // 如果当前不在历史栈末尾（即已经后退过），则丢弃当前位置之后的记录
-  if (historyIndex.value < history.value.length - 1) {
-    history.value = history.value.slice(0, historyIndex.value + 1);
+/**
+ * 返回历史中的上一页。
+ */
+function goBack() {
+  if (!canGoBack.value) {
+    return;
   }
-  // 将新菜单项追加到历史栈，并更新索引
-  history.value.push(key);
-  historyIndex.value = history.value.length - 1;
-  canGoBack.value = historyIndex.value > 0;
-  canGoForward.value = false;
 
-  // 通过 Vue Router 跳转
-  router.push({ name: key });
-};
+  historyIndex.value -= 1;
+  syncHistoryAbility();
+  router.push({ name: historyStack.value[historyIndex.value] });
+}
 
-/** 后退：回到历史记录中的上一个页面 */
-const goBack = () => {
-  if (historyIndex.value > 0) {
-    historyIndex.value--;
-    const key = history.value[historyIndex.value];
-    canGoBack.value = historyIndex.value > 0;
-    canGoForward.value = true;
-    router.push({ name: key });
+/**
+ * 前进到历史中的下一页。
+ */
+function goForward() {
+  if (!canGoForward.value) {
+    return;
   }
-};
 
-/** 前进：回到历史记录中的下一个页面 */
-const goForward = () => {
-  if (historyIndex.value < history.value.length - 1) {
-    historyIndex.value++;
-    const key = history.value[historyIndex.value];
-    canGoForward.value = historyIndex.value < history.value.length - 1;
-    canGoBack.value = true;
-    router.push({ name: key });
-  }
-};
+  historyIndex.value += 1;
+  syncHistoryAbility();
+  router.push({ name: historyStack.value[historyIndex.value] });
+}
 </script>
 
 <template>
   <div class="app-layout">
     <header class="app-header">
-      <!-- 应用标题 -->
       <h1>Camera Tools</h1>
     </header>
 
     <div class="app-menu">
       <div class="menu-inner">
-        <!-- 左侧导航菜单 -->
         <a-menu
           mode="horizontal"
           :selectedKeys="[currentMenu]"
-          @click="handleMenuClick"
           :overflowedIndicator="null"
           triggerSubMenuAction="click"
+          @click="handleMenuClick"
         >
+          <!-- "文件"顶级入口 -->
           <a-menu-item key="file">
             文件
           </a-menu-item>
-          <!-- "页面"作为子菜单，点击弹出下拉选项 -->
+
           <a-sub-menu key="pages" title="页面">
             <a-menu-item key="someip-player">
               SOME/IP Player
             </a-menu-item>
           </a-sub-menu>
-          <!-- "工具"作为子菜单，点击弹出下拉选项 -->
+
           <a-sub-menu key="tools" title="工具">
             <a-menu-item key="dhcp-server">
-              <!-- 运行状态指示灯：绿色=运行中，红色=已停止 -->
               <span
                 class="status-dot"
                 :class="dhcpServerRunning ? 'dot-green' : 'dot-red'"
@@ -125,15 +175,19 @@ const goForward = () => {
               DHCP Server
             </a-menu-item>
           </a-sub-menu>
+
+          <!-- SSH 菜单，放在"工具"和"帮助"之间 -->
+          <a-menu-item key="ssh">
+            SSH
+          </a-menu-item>
+
           <a-menu-item key="help">
             帮助
           </a-menu-item>
         </a-menu>
 
-        <!-- 右侧操作区：导航按钮 + 主题选择 -->
         <div class="right-actions">
           <div class="nav-buttons">
-            <!-- 后退按钮 -->
             <a-button
               class="nav-btn"
               :disabled="!canGoBack"
@@ -141,7 +195,7 @@ const goForward = () => {
             >
               <LeftOutlined />
             </a-button>
-            <!-- 前进按钮 -->
+
             <a-button
               class="nav-btn"
               :disabled="!canGoForward"
@@ -150,7 +204,7 @@ const goForward = () => {
               <RightOutlined />
             </a-button>
           </div>
-          <!-- 主题选择下拉框 -->
+
           <a-select
             class="theme-selector"
             :value="'default'"
@@ -165,28 +219,25 @@ const goForward = () => {
     </div>
 
     <main class="app-content">
-      <!-- Vue Router 页面渲染出口 -->
       <router-view />
     </main>
   </div>
 </template>
 
 <style scoped>
-/* ========== 整体布局 ========== */
 .app-layout {
   display: flex;
   flex-direction: column;
   height: 100vh;
 }
 
-/* ========== 标题栏 ========== */
 .app-header {
-  background-color: #001529;
-  color: #fff;
-  padding: 0 24px;
   display: flex;
   align-items: center;
   height: 48px;
+  padding: 0 24px;
+  background-color: #001529;
+  color: #fff;
 }
 
 .app-header h1 {
@@ -195,25 +246,21 @@ const goForward = () => {
   font-weight: 600;
 }
 
-/* ========== 菜单栏 ========== */
 .app-menu {
   border-bottom: 1px solid #f0f0f0;
 }
 
-/* 菜单栏内部容器：左侧菜单 + 右侧操作区 */
 .menu-inner {
   display: flex;
   align-items: center;
 }
 
-/* 左侧菜单占满剩余空间，防止 ant-design 自动溢出折叠为 "..." */
 .menu-inner .ant-menu {
   flex: 1;
   min-width: 0;
   overflow: hidden;
 }
 
-/* 右侧操作区：导航按钮 + 主题选择器 */
 .right-actions {
   display: flex;
   align-items: center;
@@ -221,20 +268,18 @@ const goForward = () => {
   padding-right: 16px;
 }
 
-/* ========== 导航按钮 ========== */
 .nav-buttons {
   display: flex;
   gap: 4px;
 }
 
 .nav-btn {
-  /* 长方形按钮：固定高度，宽度由 padding 撑开 */
-  height: 32px;
-  min-width: 40px;
-  padding: 0 10px;
   display: flex;
   align-items: center;
   justify-content: center;
+  min-width: 40px;
+  height: 32px;
+  padding: 0 10px;
   border: none;
   border-radius: 4px;
   background: #333;
@@ -243,31 +288,27 @@ const goForward = () => {
   transition: all 0.2s;
 }
 
-/* 悬停时：背景变浅 */
 .nav-btn:hover:not(:disabled) {
   background: #555;
   color: #fff;
 }
 
-/* 禁用时：灰色背景 + 浅灰图标 */
 .nav-btn:disabled {
   background: #e0e0e0;
   color: #bbb;
   cursor: not-allowed;
 }
 
-/* 图标尺寸 */
 .nav-btn .anticon {
   font-size: 14px;
 }
 
-/* ========== 状态指示灯 ========== */
 .status-dot {
   display: inline-block;
   width: 8px;
   height: 8px;
-  border-radius: 50%;
   margin-right: 6px;
+  border-radius: 50%;
   vertical-align: middle;
 }
 
@@ -281,23 +322,21 @@ const goForward = () => {
   box-shadow: 0 0 4px rgba(255, 77, 79, 0.6);
 }
 
-/* ========== 主题选择器 ========== */
 .theme-selector {
   min-width: 120px;
 }
 
-/* ========== 内容区域 ========== */
 .app-content {
   flex: 1;
   padding: 24px;
 }
 </style>
+
 <style>
-/* ========== 全局重置样式 ========== */
 * {
+  box-sizing: border-box;
   margin: 0;
   padding: 0;
-  box-sizing: border-box;
 }
 
 body {
