@@ -4,7 +4,7 @@
  * 提供与后端 Tauri 命令交互的函数
  */
 
-import { invoke } from '@tauri-apps/api';
+import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
   TelnetConfig,
@@ -16,6 +16,14 @@ import type {
   MountResult,
   TelnetCmdResult,
 } from './types';
+
+/**
+ * 向旧页面继续透出常用类型。
+ *
+ * 这样像 `TelnetTest.vue` 这种历史页面仍然可以从当前文件直接导入类型，
+ * 不需要额外修改旧调用方。
+ */
+export type { TelnetConfig, ConnectionStatus } from './types';
 
 /**
  * 连接设备
