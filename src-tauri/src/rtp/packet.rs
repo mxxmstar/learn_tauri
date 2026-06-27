@@ -94,7 +94,12 @@ fn read_u16(data: &[u8], offset: usize) -> u16 {
 }
 
 fn read_u32(data: &[u8], offset: usize) -> u32 {
-    u32::from_be_bytes([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]])
+    u32::from_be_bytes([
+        data[offset],
+        data[offset + 1],
+        data[offset + 2],
+        data[offset + 3],
+    ])
 }
 
 impl RtpPacket {
@@ -109,6 +114,13 @@ impl RtpPacket {
 
         let b0 = data[0];
         let version = (b0 >> 6) & 0x03;
+        if version != 2 {
+            return Err(RtpError::ParseError(format!(
+                "unsupported RTP version {}",
+                version
+            )));
+        }
+
         let padding = ((b0 >> 5) & 0x01) != 0;
         let extension = ((b0 >> 4) & 0x01) != 0;
         let csrc_count = (b0 & 0x0f) as usize;
@@ -157,7 +169,7 @@ impl RtpPacket {
         // Determine payload end (accounting for padding)
         let payload_end = if padding && !data.is_empty() {
             let pad_size = data[data.len() - 1] as usize;
-            if pad_size > data.len() - offset {
+            if pad_size == 0 || pad_size > data.len() - offset {
                 return Err(RtpError::ParseError("invalid padding size".into()));
             }
             data.len() - pad_size
@@ -223,7 +235,17 @@ mod tests {
     #[test]
     fn test_parse_minimal_header() {
         let data = make_rtp_bytes(
-            2, false, false, 0, false, 0, 1, 12345, 0xdeadbeef, &[], &[0x01, 0x02, 0x03],
+            2,
+            false,
+            false,
+            0,
+            false,
+            0,
+            1,
+            12345,
+            0xdeadbeef,
+            &[],
+            &[0x01, 0x02, 0x03],
         );
         let pkt = RtpPacket::from_bytes(&data).unwrap();
 
@@ -240,8 +262,17 @@ mod tests {
     #[test]
     fn test_parse_with_csrc() {
         let data = make_rtp_bytes(
-            2, false, false, 2, true, 8, 42, 999, 0x11111111,
-            &[0x22222222, 0x33333333], &[0xff],
+            2,
+            false,
+            false,
+            2,
+            true,
+            8,
+            42,
+            999,
+            0x11111111,
+            &[0x22222222, 0x33333333],
+            &[0xff],
         );
         let pkt = RtpPacket::from_bytes(&data).unwrap();
 
@@ -256,6 +287,39 @@ mod tests {
     fn test_buffer_too_short() {
         let err = RtpPacket::from_bytes(&[0x80]).unwrap_err();
         assert!(matches!(err, RtpError::BufferTooShort { .. }));
+    }
+
+    #[test]
+    fn test_invalid_version() {
+        let data = make_rtp_bytes(1, false, false, 0, false, 0, 1, 0, 0, &[], &[]);
+        let err = RtpPacket::from_bytes(&data).unwrap_err();
+        assert!(matches!(err, RtpError::ParseError(_)));
+    }
+
+    #[test]
+    fn test_parse_with_padding() {
+        let data = make_rtp_bytes(
+            2,
+            true,
+            false,
+            0,
+            false,
+            0,
+            1,
+            0,
+            0,
+            &[],
+            &[0xaa, 0x00, 0x02],
+        );
+        let pkt = RtpPacket::from_bytes(&data).unwrap();
+        assert_eq!(&pkt.payload[..], &[0xaa]);
+    }
+
+    #[test]
+    fn test_invalid_zero_padding_size() {
+        let data = make_rtp_bytes(2, true, false, 0, false, 0, 1, 0, 0, &[], &[0xaa, 0x00]);
+        let err = RtpPacket::from_bytes(&data).unwrap_err();
+        assert!(matches!(err, RtpError::ParseError(_)));
     }
 
     #[test]

@@ -6,9 +6,9 @@
 //! - 聚合包模式 (AP)
 //! - 前向纠错 (FEC) - 暂不实现
 
-use crate::rtp::packet::RtpPacket;
 use crate::rtp::decoder::frame::MediaPacket;
-use crate::rtp::decoder::types::{MediaType, CodecType};
+use crate::rtp::decoder::types::{CodecType, MediaType};
+use crate::rtp::packet::RtpPacket;
 use bytes::{Bytes, BytesMut};
 use std::collections::BTreeMap;
 
@@ -35,6 +35,9 @@ pub enum H265NalUnitType {
     EndOfStream,
     /// 填充数据
     FillerData,
+    BlaWLp,
+    BlaWRadl,
+    BlaNLp,
     /// 视频切片 (IDR)
     IdrNlp,
     /// 视频切片 (IDR) 前缀
@@ -55,26 +58,25 @@ impl H265NalUnitType {
         match t {
             0 => H265NalUnitType::TrailN,
             1 => H265NalUnitType::TrailR,
-            2 => H265NalUnitType::TrailN,
-            3 => H265NalUnitType::TrailR,
-            16 => H265NalUnitType::Sps,
-            17 => H265NalUnitType::Pps,
-            18 => H265NalUnitType::Aud,
-            19 => H265NalUnitType::EndOfSequence,
-            20 => H265NalUnitType::EndOfStream,
-            21 => H265NalUnitType::FillerData,
-            22 => H265NalUnitType::Sps, // SPS_EXT
+            2 | 4 | 6 | 8 => H265NalUnitType::TrailN,
+            3 | 5 | 7 | 9 => H265NalUnitType::TrailR,
+            16 => H265NalUnitType::BlaWLp,
+            17 => H265NalUnitType::BlaWRadl,
+            18 => H265NalUnitType::BlaNLp,
+            19 => H265NalUnitType::IdrWRadl,
+            20 => H265NalUnitType::IdrNlp,
+            21 => H265NalUnitType::Cra,
             32 => H265NalUnitType::Vps,
-            33 => H265NalUnitType::Pps, // PPS_EXT (actually 33 is reserved, but some implementations use it)
-            34 => H265NalUnitType::SeiPrefix,
-            35 => H265NalUnitType::SeiPrefix,
-            39 => H265NalUnitType::Sei,
+            33 => H265NalUnitType::Sps,
+            34 => H265NalUnitType::Pps,
+            35 => H265NalUnitType::Aud,
+            36 => H265NalUnitType::EndOfSequence,
+            37 => H265NalUnitType::EndOfStream,
+            38 => H265NalUnitType::FillerData,
+            39 => H265NalUnitType::SeiPrefix,
             40 => H265NalUnitType::Sei,
-            48 => H265NalUnitType::IdrWRadl,
-            49 => H265NalUnitType::IdrNlp,
-            50 => H265NalUnitType::Cra,
-            55 => H265NalUnitType::Fu,
-            48..=63 => H265NalUnitType::Fu, // FU types
+            48 => H265NalUnitType::Ap,
+            49 => H265NalUnitType::Fu,
             _ => H265NalUnitType::Unspecified(t),
         }
     }
@@ -83,39 +85,45 @@ impl H265NalUnitType {
         match self {
             H265NalUnitType::TrailN => 0,
             H265NalUnitType::TrailR => 1,
-            H265NalUnitType::Sps => 16,
-            H265NalUnitType::Pps => 17,
-            H265NalUnitType::Aud => 18,
-            H265NalUnitType::EndOfSequence => 19,
-            H265NalUnitType::EndOfStream => 20,
-            H265NalUnitType::FillerData => 21,
+            H265NalUnitType::BlaWLp => 16,
+            H265NalUnitType::BlaWRadl => 17,
+            H265NalUnitType::BlaNLp => 18,
+            H265NalUnitType::IdrWRadl => 19,
+            H265NalUnitType::IdrNlp => 20,
+            H265NalUnitType::Cra => 21,
             H265NalUnitType::Vps => 32,
-            H265NalUnitType::SeiPrefix => 34,
-            H265NalUnitType::Sei => 39,
-            H265NalUnitType::IdrWRadl => 48,
-            H265NalUnitType::IdrNlp => 49,
-            H265NalUnitType::Cra => 50,
-            H265NalUnitType::Fu => 49, // Actually FU uses 49 as base
-            H265NalUnitType::Ap => 48, // Actually AP uses 48 as base
+            H265NalUnitType::Sps => 33,
+            H265NalUnitType::Pps => 34,
+            H265NalUnitType::Aud => 35,
+            H265NalUnitType::EndOfSequence => 36,
+            H265NalUnitType::EndOfStream => 37,
+            H265NalUnitType::FillerData => 38,
+            H265NalUnitType::SeiPrefix => 39,
+            H265NalUnitType::Sei => 40,
+            H265NalUnitType::Ap => 48,
+            H265NalUnitType::Fu => 49,
             H265NalUnitType::Unspecified(t) => *t,
         }
     }
 
     /// 判断是否关键帧 NAL 类型
     pub fn is_keyframe(&self) -> bool {
-        matches!(self, 
-            H265NalUnitType::IdrWRadl | 
-            H265NalUnitType::IdrNlp | 
-            H265NalUnitType::Cra
+        matches!(
+            self,
+            H265NalUnitType::BlaWLp
+                | H265NalUnitType::BlaWRadl
+                | H265NalUnitType::BlaNLp
+                | H265NalUnitType::IdrWRadl
+                | H265NalUnitType::IdrNlp
+                | H265NalUnitType::Cra
         )
     }
 
     /// 判断是否是参数集类型
     pub fn is_parameter_set(&self) -> bool {
-        matches!(self,
-            H265NalUnitType::Sps |
-            H265NalUnitType::Pps |
-            H265NalUnitType::Vps
+        matches!(
+            self,
+            H265NalUnitType::Sps | H265NalUnitType::Pps | H265NalUnitType::Vps
         )
     }
 }
@@ -192,7 +200,7 @@ impl FuHeader {
         Self {
             start: (byte & 0x80) != 0,
             end: (byte & 0x40) != 0,
-            reserved: byte & 0x3F,
+            reserved: 0,
             nal_type: byte & 0x3F,
         }
     }
@@ -205,7 +213,7 @@ impl FuHeader {
         if self.end {
             b |= 0x40;
         }
-        b |= self.reserved & 0x3F;
+        b |= self.nal_type & 0x3F;
         b
     }
 }
@@ -319,9 +327,10 @@ impl H265Reassembler {
             _ => {}
         }
 
-        let entry = self.current_aus.entry(timestamp).or_insert_with(|| {
-            H265AccessUnitBuilder::new()
-        });
+        let entry = self
+            .current_aus
+            .entry(timestamp)
+            .or_insert_with(|| H265AccessUnitBuilder::new());
 
         // 添加起始码 + NAL 单元
         let mut nal_with_startcode = BytesMut::new();
@@ -350,9 +359,10 @@ impl H265Reassembler {
         let fu_header_byte = payload[2];
         let fu_header = FuHeader::from_byte(fu_header_byte);
 
-        let entry = self.current_aus.entry(timestamp).or_insert_with(|| {
-            H265AccessUnitBuilder::new()
-        });
+        let entry = self
+            .current_aus
+            .entry(timestamp)
+            .or_insert_with(|| H265AccessUnitBuilder::new());
 
         if fu_header.start {
             // 第一个分片：重建原始 NAL 头
@@ -360,12 +370,9 @@ impl H265Reassembler {
             let mut original_nal_header = [0u8; 2];
             // 从 FU 的 NAL header (payload[0..2]) 获取 F, LayerId, TID
             // 从 FU header 获取原始 NAL type
-            original_nal_header[0] = (payload[0] & 0x81) | ((fu_header.nal_type & 0x3F) << 1);
-            original_nal_header[1] = payload[1];
-            
             // 有些实现使用不同的方式重建，这里采用标准方式:
             // 新 NAL 头的 Type 字段使用 FU header 中的 NAL type
-            original_nal_header[0] = (payload[0] & 0x80) | ((fu_header.nal_type << 1) & 0x7E);
+            original_nal_header[0] = (payload[0] & 0x81) | ((fu_header.nal_type << 1) & 0x7E);
             original_nal_header[1] = payload[1];
 
             entry.fu_nal_header = Some(original_nal_header);
@@ -377,17 +384,22 @@ impl H265Reassembler {
             entry.fu_data.extend_from_slice(&original_nal_header);
             entry.fu_data.extend_from_slice(&payload[3..]);
 
-            entry.is_keyframe = H265NalUnitType::from_u8(fu_header.nal_type).is_keyframe();
+            if H265NalUnitType::from_u8(fu_header.nal_type).is_keyframe() {
+                entry.is_keyframe = true;
+            }
         } else if entry.fu_started {
             // 中间或结束分片
             entry.fu_data.extend_from_slice(&payload[3..]);
+        } else {
+            return None;
         }
 
-        if fu_header.end {
+        if fu_header.end && entry.fu_started {
             // 分片结束
             let complete_nal = std::mem::take(&mut entry.fu_data).freeze();
             entry.nals.push(complete_nal);
             entry.fu_started = false;
+            entry.fu_nal_header = None;
         }
 
         Some(())
@@ -406,9 +418,10 @@ impl H265Reassembler {
             return None;
         }
 
-        let entry = self.current_aus.entry(timestamp).or_insert_with(|| {
-            H265AccessUnitBuilder::new()
-        });
+        let entry = self
+            .current_aus
+            .entry(timestamp)
+            .or_insert_with(|| H265AccessUnitBuilder::new());
 
         // 跳过 AP NAL 头 (2 字节)
         let mut offset = 2;
@@ -423,7 +436,7 @@ impl H265Reassembler {
             }
 
             let nal_data = &payload[offset..offset + nal_len];
-            
+
             if nal_data.len() >= 2 {
                 let (_, nal_type, _, _) = parse_h265_nal_header(nal_data)?;
 
@@ -596,7 +609,12 @@ mod tests {
         assert!(result.is_some());
         let (_, nal_type, layer_id, tid) = result.unwrap();
         assert_eq!(nal_type, H265NalUnitType::Vps);
+        assert_eq!(layer_id, 0);
         assert_eq!(tid, 1);
+        assert_eq!(H265NalUnitType::from_u8(19), H265NalUnitType::IdrWRadl);
+        assert_eq!(H265NalUnitType::from_u8(20), H265NalUnitType::IdrNlp);
+        assert_eq!(H265NalUnitType::from_u8(48), H265NalUnitType::Ap);
+        assert_eq!(H265NalUnitType::from_u8(49), H265NalUnitType::Fu);
     }
 
     #[test]
@@ -621,18 +639,18 @@ mod tests {
 
         // 模拟一个被分片的 IDR NAL 单元
         // NAL header (FU): Type=49
-        // FU header: S=1, E=0, NAL type=48 (IDR_W_RADL)
-        let part1 = vec![0x62, 0x01, 0x80, 0x01, 0x02, 0x03];
+        // FU header: S=1, E=0, NAL type=19 (IDR_W_RADL)
+        let part1 = vec![0x62, 0x01, 0x93, 0x01, 0x02, 0x03];
         let mut pkt1 = make_packet(part1, 2000, false);
         pkt1.header.sequence_number = 1;
 
         // FU header: S=0, E=0
-        let part2 = vec![0x62, 0x01, 0x00, 0x04, 0x05, 0x06];
+        let part2 = vec![0x62, 0x01, 0x13, 0x04, 0x05, 0x06];
         let mut pkt2 = make_packet(part2, 2000, false);
         pkt2.header.sequence_number = 2;
 
         // FU header: S=0, E=1
-        let part3 = vec![0x62, 0x01, 0x40, 0x07, 0x08, 0x09];
+        let part3 = vec![0x62, 0x01, 0x53, 0x07, 0x08, 0x09];
         let mut pkt3 = make_packet(part3, 2000, true);
         pkt3.header.sequence_number = 3;
 
@@ -643,5 +661,6 @@ mod tests {
         assert!(au.is_some());
         let au = au.unwrap();
         assert!(au.is_keyframe);
+        assert_eq!(&au.data[4..6], &[0x26, 0x01]);
     }
 }

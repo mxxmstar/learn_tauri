@@ -2,8 +2,8 @@
 //!
 //! 对齐 C++ 端的 MediaPacket 和 MediaFrame 类
 
+use crate::rtp::decoder::types::{BackendHandle, CodecType, MediaType, PixelFormat, SampleFormat};
 use bytes::Bytes;
-use crate::rtp::decoder::types::{MediaType, CodecType, PixelFormat, SampleFormat, BackendHandle};
 
 /// 编码数据包（输入到解码器）
 ///
@@ -150,7 +150,8 @@ impl MediaFrame {
     /// 创建新的视频帧 MediaFrame
     pub fn new(pixel_format: PixelFormat, width: i32, height: i32, data: Bytes) -> Self {
         // 自动计算 stride 和 plane_offset
-        let (stride, plane_offset, plane_count) = Self::calc_stride_and_offset(pixel_format, width, height);
+        let (stride, plane_offset, plane_count) =
+            Self::calc_stride_and_offset(pixel_format, width, height);
 
         Self {
             media_type: MediaType::Video,
@@ -257,7 +258,7 @@ impl MediaFrame {
     ) -> ([i32; 8], [i32; 8], i32) {
         let mut stride = [0; 8];
         let mut plane_offset = [0; 8];
-        let mut plane_count = 0;
+        let plane_count;
 
         match pixel_format {
             PixelFormat::RGBA | PixelFormat::BGRA => {
@@ -520,7 +521,8 @@ mod tests {
         let data_size = 2 * channels * nb_samples; // S16 = 2 bytes
         let data = Bytes::from(vec![0u8; data_size as usize]);
 
-        let frame = MediaFrame::new_audio(SampleFormat::S16, sample_rate, channels, nb_samples, data);
+        let frame =
+            MediaFrame::new_audio(SampleFormat::S16, sample_rate, channels, nb_samples, data);
 
         assert_eq!(frame.media_type, MediaType::Audio);
         assert_eq!(frame.sample_format, SampleFormat::S16);
@@ -548,7 +550,8 @@ mod tests {
         let data_size = 4 * channels * nb_samples; // F32 = 4 bytes, planar
         let data = Bytes::from(vec![0u8; data_size as usize]);
 
-        let frame = MediaFrame::new_audio(SampleFormat::F32P, sample_rate, channels, nb_samples, data);
+        let frame =
+            MediaFrame::new_audio(SampleFormat::F32P, sample_rate, channels, nb_samples, data);
 
         assert_eq!(frame.media_type, MediaType::Audio);
         assert_eq!(frame.sample_format, SampleFormat::F32P);

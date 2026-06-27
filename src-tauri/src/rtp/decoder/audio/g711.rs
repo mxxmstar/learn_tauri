@@ -6,10 +6,10 @@
 //! - A-law: 欧洲标准
 //! - μ-law: 北美和日本标准
 
-use bytes::Bytes;
-use crate::rtp::decoder::trait_::{Decoder, DecodeResult, DecodeError};
-use crate::rtp::decoder::types::{CodecType, SampleFormat};
 use crate::rtp::decoder::frame::{MediaFrame, MediaPacket};
+use crate::rtp::decoder::trait_::{DecodeResult, Decoder};
+use crate::rtp::decoder::types::{CodecType, SampleFormat};
+use bytes::Bytes;
 
 /// G.711 A-law 解码器
 pub struct G711ADecoder {
@@ -226,7 +226,11 @@ const fn alaw_decode(alaw: u8) -> i16 {
 
     // 步骤 4: 应用符号位
     // sign != 0 表示正数，sign == 0 表示负数
-    if sign != 0 { pcm } else { -pcm }
+    if sign != 0 {
+        pcm
+    } else {
+        -pcm
+    }
 }
 
 /// 编译时计算 μ-law 解码值（标准 G.711 算法）
@@ -248,7 +252,11 @@ const fn ulaw_decode(ulaw: u8) -> i16 {
 
     // 步骤 4: 应用符号位
     // sign != 0 表示正数，sign == 0 表示负数
-    if sign != 0 { pcm } else { -pcm }
+    if sign != 0 {
+        pcm
+    } else {
+        -pcm
+    }
 }
 
 #[cfg(test)]
@@ -307,8 +315,8 @@ mod tests {
         let pcm_pos = alaw_to_pcm(0xD5);
         // 0x55 是 A-law 编码的静音（负方向），解码为 -8
         let pcm_neg = alaw_to_pcm(0x55);
-        assert_eq!(pcm_pos, 8);   // 正静音
-        assert_eq!(pcm_neg, -8);  // 负静音
+        assert_eq!(pcm_pos, 8); // 正静音
+        assert_eq!(pcm_neg, -8); // 负静音
         assert_eq!(pcm_pos, -pcm_neg); // 互为相反数
     }
 
@@ -319,6 +327,6 @@ mod tests {
         let pcm1 = ulaw_to_pcm(0xFF);
         let pcm2 = ulaw_to_pcm(0x7F);
         assert_eq!(pcm1, pcm2); // 两者都解码为 0
-        assert_eq!(pcm1, 0);    // 静音应该解码为 0
+        assert_eq!(pcm1, 0); // 静音应该解码为 0
     }
 }

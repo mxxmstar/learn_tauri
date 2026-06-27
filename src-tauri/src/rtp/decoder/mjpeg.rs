@@ -2,10 +2,10 @@
 //!
 //! 使用 image crate 实现 MJPEG 解码
 
-use image::{DynamicImage, ImageFormat};
 use crate::rtp::decoder::frame::{MediaFrame, MediaPacket};
 use crate::rtp::decoder::trait_::{DecodeError, DecodeResult, Decoder};
 use crate::rtp::decoder::types::{CodecType, PixelFormat};
+use image::DynamicImage;
 
 /// MJPEG 解码器
 ///
@@ -162,16 +162,16 @@ impl Decoder for MjpegDecoder {
 
 /// 尝试从 JPEG 数据中提取尺寸信息（不解码整个图像）
 pub fn get_jpeg_dimensions(data: &[u8]) -> DecodeResult<(u32, u32)> {
-    let reader = std::io::Cursor::new(data);
     let format = image::ImageFormat::from_path("dummy.jpg")
         .ok()
         .unwrap_or(image::ImageFormat::Jpeg);
-    
+
     // 使用 image::ImageReader 来读取尺寸
     let mut reader = image::ImageReader::new(std::io::Cursor::new(data));
     reader.set_format(format);
-    
-    let dims = reader.into_dimensions()
+
+    let dims = reader
+        .into_dimensions()
         .map_err(|e| DecodeError::DecodeFailed(format!("failed to get JPEG dimensions: {}", e)))?;
     Ok(dims)
 }
@@ -180,6 +180,7 @@ pub fn get_jpeg_dimensions(data: &[u8]) -> DecodeResult<(u32, u32)> {
 mod tests {
     use super::*;
     use bytes::Bytes;
+    use image::ImageFormat;
 
     #[test]
     fn test_mjpeg_decoder_new() {

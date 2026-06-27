@@ -6,9 +6,9 @@
 //! - 聚合包模式 (STAP-A, STAP-B)
 //! - 多时间聚合包 (MTAP16, MTAP24)
 
-use crate::rtp::packet::RtpPacket;
 use crate::rtp::decoder::frame::MediaPacket;
-use crate::rtp::decoder::types::{MediaType, CodecType};
+use crate::rtp::decoder::types::{CodecType, MediaType};
+use crate::rtp::packet::RtpPacket;
 use bytes::{Bytes, BytesMut};
 use std::collections::BTreeMap;
 
@@ -71,12 +71,12 @@ impl NalUnitType {
             10 => NalUnitType::EndOfSequence,
             11 => NalUnitType::EndOfStream,
             12 => NalUnitType::FillerData,
-            14 => NalUnitType::FuA,
-            15 => NalUnitType::FuB,
             24 => NalUnitType::StapA,
             25 => NalUnitType::StapB,
             26 => NalUnitType::Mtap16,
             27 => NalUnitType::Mtap24,
+            28 => NalUnitType::FuA,
+            29 => NalUnitType::FuB,
             _ => NalUnitType::Unspecified(t),
         }
     }
@@ -96,12 +96,12 @@ impl NalUnitType {
             NalUnitType::EndOfSequence => 10,
             NalUnitType::EndOfStream => 11,
             NalUnitType::FillerData => 12,
-            NalUnitType::FuA => 14,
-            NalUnitType::FuB => 15,
             NalUnitType::StapA => 24,
             NalUnitType::StapB => 25,
             NalUnitType::Mtap16 => 26,
             NalUnitType::Mtap24 => 27,
+            NalUnitType::FuA => 28,
+            NalUnitType::FuB => 29,
         }
     }
 }
@@ -268,9 +268,10 @@ impl H264Reassembler {
             _ => {}
         }
 
-        let entry = self.current_aus.entry(timestamp).or_insert_with(|| {
-            AccessUnitBuilder::new()
-        });
+        let entry = self
+            .current_aus
+            .entry(timestamp)
+            .or_insert_with(|| AccessUnitBuilder::new());
 
         // 添加起始码 + NAL 单元
         let mut nal_with_startcode = BytesMut::new();
@@ -293,9 +294,10 @@ impl H264Reassembler {
         }
 
         let fu_header = FuHeader::from_byte(payload[1]);
-        let entry = self.current_aus.entry(timestamp).or_insert_with(|| {
-            AccessUnitBuilder::new()
-        });
+        let entry = self
+            .current_aus
+            .entry(timestamp)
+            .or_insert_with(|| AccessUnitBuilder::new());
 
         if fu_header.start {
             // 第一个分片：重建 NAL 头
@@ -310,17 +312,22 @@ impl H264Reassembler {
             entry.fu_data.extend_from_slice(&[nal_header]);
             entry.fu_data.extend_from_slice(&payload[2..]);
 
-            entry.is_keyframe = matches!(fu_header.nal_type, NalUnitType::SliceIdr);
+            if matches!(fu_header.nal_type, NalUnitType::SliceIdr) {
+                entry.is_keyframe = true;
+            }
         } else if entry.fu_started {
             // 中间或结束分片
             entry.fu_data.extend_from_slice(&payload[2..]);
+        } else {
+            return None;
         }
 
-        if fu_header.end {
+        if fu_header.end && entry.fu_started {
             // 分片结束，将完整 NAL 单元添加到 AU
             let complete_nal = std::mem::take(&mut entry.fu_data).freeze();
             entry.nals.push(complete_nal);
             entry.fu_started = false;
+            entry.fu_nal_header = None;
         }
 
         Some(())
@@ -344,13 +351,14 @@ impl H264Reassembler {
 
     /// 处理 STAP-A (单时间聚合包)
     fn handle_stap_a(&mut self, timestamp: u32, payload: &[u8]) -> Option<()> {
-        if payload.len() < 3 {
+        if payload.len() < 4 {
             return None;
         }
 
-        let entry = self.current_aus.entry(timestamp).or_insert_with(|| {
-            AccessUnitBuilder::new()
-        });
+        let entry = self
+            .current_aus
+            .entry(timestamp)
+            .or_insert_with(|| AccessUnitBuilder::new());
 
         // 跳过 STAP-A 头 (1 字节)
         let mut offset = 1;
@@ -359,8 +367,8 @@ impl H264Reassembler {
             let nal_len = u16::from_be_bytes([payload[offset], payload[offset + 1]]) as usize;
             offset += 2;
 
-            if offset + nal_len > payload.len() {
-                break;
+            if nal_len == 0 || offset + nal_len > payload.len() {
+                return None;
             }
 
             let nal_data = &payload[offset..offset + nal_len];
@@ -397,12 +405,14 @@ impl H264Reassembler {
     /// 处理 STAP-B (单时间聚合包，带 DON)
     fn handle_stap_b(&mut self, timestamp: u32, payload: &[u8]) -> Option<()> {
         // STAP-B 与 STAP-A 类似，但包含 DON (前 2 字节)
-        if payload.len() < 3 {
+        if payload.len() < 5 {
             return None;
         }
         // 跳过 STAP-B 头 (1 字节) 和 DON (2 字节)
-        let stap_a_payload = &payload[2..];
-        self.handle_stap_a(timestamp, stap_a_payload)
+        let mut stap_a_payload = Vec::with_capacity(payload.len() - 2);
+        stap_a_payload.push(payload[0]);
+        stap_a_payload.extend_from_slice(&payload[3..]);
+        self.handle_stap_a(timestamp, &stap_a_payload)
     }
 
     /// 完成一个访问单元的重组
@@ -535,6 +545,10 @@ mod tests {
         assert!(!forbidden);
         assert_eq!(nri, 3);
         assert_eq!(nal_type, NalUnitType::Sps);
+        assert_eq!(NalUnitType::from_u8(28), NalUnitType::FuA);
+        assert_eq!(NalUnitType::from_u8(29), NalUnitType::FuB);
+        assert_eq!(NalUnitType::FuA.to_u8(), 28);
+        assert_eq!(NalUnitType::FuB.to_u8(), 29);
     }
 
     #[test]
