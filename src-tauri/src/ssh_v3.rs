@@ -6,13 +6,17 @@
 //! 3. SFTP 目录浏览与属性读取；
 //! 4. 文件下载、文件上传；
 //! 5. 文本文件本地缓存预览；
-//! 6. 第三版新增：新建目录、重命名、删除文件 / 空目录。
+//! 6. 第三版新增：新建目录、重命名、删除文件 / 空目录；
+//! 7. 第四版新增：文本文件在线编辑并保存回远程；
+//! 8. 第五版新增：目录递归上传 / 下载；
+//! 9. 第六版新增：非空目录递归删除。
 
 #[path = "ssh/types.rs"]
 pub mod types;
 
 use std::{
     collections::HashMap,
+    fs as std_fs,
     path::{Path, PathBuf},
     sync::{Arc, OnceLock},
     time::Instant,
@@ -32,9 +36,10 @@ use tokio::{
     sync::Mutex,
 };
 use types::{
-    CreateDirectoryResult, DeletePathResult, DownloadProgress, FileDownloadResult,
-    FileUploadResult, OpenFileResult, RemoteFileEntry, RemoteFileProperties, RenamePathResult,
-    SshCmdResult, SshConnectRequest, SshHostProbeRequest, SshHostProbeResult, SshSessionInfo,
+    CreateDirectoryResult, DeletePathResult, DirectoryDownloadResult, DirectoryUploadResult,
+    DownloadProgress, FileDownloadResult, FileUploadResult, OpenFileResult, RemoteFileEntry,
+    RemoteFileProperties, RenamePathResult, SaveRemoteTextResult, SshCmdResult,
+    SshConnectRequest, SshHostProbeRequest, SshHostProbeResult, SshSessionInfo,
     SuggestedDownloadPath, UploadProgress,
 };
 use uuid::Uuid;
@@ -46,6 +51,50 @@ struct ManagedSshSession {
     /// 这里用 `Mutex` 串行化同一会话内的文件操作，
     /// 避免底层通道被并发读写带来额外复杂性。
     sftp: Mutex<SftpSession>,
+}
+
+/// 递归下载过程中记录的单个远程文件任务。
+struct RecursiveRemoteFileTask {
+    /// 远程完整路径。
+    remote_path: String,
+    /// 相对于递归根目录的相对路径。
+    relative_path: PathBuf,
+    /// 当前文件大小。
+    size: u64,
+}
+
+/// 递归上传过程中记录的单个本地文件任务。
+struct RecursiveLocalFileTask {
+    /// 本地完整路径。
+    local_path: PathBuf,
+    /// 相对于递归根目录的相对路径。
+    relative_path: PathBuf,
+    /// 当前文件大小。
+    size: u64,
+}
+
+/// 远程目录递归下载前的任务规划结果。
+struct RecursiveRemoteDownloadPlan {
+    /// 除根目录外，需要在本地创建的相对子目录列表。
+    directories: Vec<PathBuf>,
+    /// 需要下载的文件列表。
+    files: Vec<RecursiveRemoteFileTask>,
+    /// 目录总数，包含根目录。
+    directory_count: u64,
+    /// 全部文件累计字节数。
+    total_bytes: u64,
+}
+
+/// 本地目录递归上传前的任务规划结果。
+struct RecursiveLocalUploadPlan {
+    /// 除根目录外，需要在远程创建的相对子目录列表。
+    directories: Vec<PathBuf>,
+    /// 需要上传的文件列表。
+    files: Vec<RecursiveLocalFileTask>,
+    /// 目录总数，包含根目录。
+    directory_count: u64,
+    /// 全部文件累计字节数。
+    total_bytes: u64,
 }
 
 /// 全局会话表。
@@ -237,6 +286,32 @@ pub async fn sftp_download_file(
     }
 }
 
+/// 第五版新增：递归下载远程目录到本地目录。
+#[tauri::command]
+pub async fn sftp_download_directory(
+    window: Window,
+    session_id: String,
+    remote_path: String,
+    local_dir: String,
+) -> SshCmdResult<DirectoryDownloadResult> {
+    match sftp_download_directory_inner(Some(&window), &session_id, &remote_path, &local_dir).await {
+        Ok(result) => SshCmdResult::ok(result),
+        Err(error) => SshCmdResult::err(error.to_string()),
+    }
+}
+
+/// 提供给验证示例的“无事件递归下载”接口。
+pub async fn sftp_download_directory_without_events(
+    session_id: String,
+    remote_path: String,
+    local_dir: String,
+) -> SshCmdResult<DirectoryDownloadResult> {
+    match sftp_download_directory_inner(None, &session_id, &remote_path, &local_dir).await {
+        Ok(result) => SshCmdResult::ok(result),
+        Err(error) => SshCmdResult::err(error.to_string()),
+    }
+}
+
 /// 上传本地文件到当前远程目录。
 #[tauri::command]
 pub async fn sftp_upload_file(
@@ -246,6 +321,32 @@ pub async fn sftp_upload_file(
     remote_dir: String,
 ) -> SshCmdResult<FileUploadResult> {
     match sftp_upload_file_inner(Some(&window), &session_id, &local_path, &remote_dir).await {
+        Ok(result) => SshCmdResult::ok(result),
+        Err(error) => SshCmdResult::err(error.to_string()),
+    }
+}
+
+/// 第五版新增：递归上传本地目录到远程目录。
+#[tauri::command]
+pub async fn sftp_upload_directory(
+    window: Window,
+    session_id: String,
+    local_path: String,
+    remote_dir: String,
+) -> SshCmdResult<DirectoryUploadResult> {
+    match sftp_upload_directory_inner(Some(&window), &session_id, &local_path, &remote_dir).await {
+        Ok(result) => SshCmdResult::ok(result),
+        Err(error) => SshCmdResult::err(error.to_string()),
+    }
+}
+
+/// 提供给验证示例的“无事件递归上传”接口。
+pub async fn sftp_upload_directory_without_events(
+    session_id: String,
+    local_path: String,
+    remote_dir: String,
+) -> SshCmdResult<DirectoryUploadResult> {
+    match sftp_upload_directory_inner(None, &session_id, &local_path, &remote_dir).await {
         Ok(result) => SshCmdResult::ok(result),
         Err(error) => SshCmdResult::err(error.to_string()),
     }
@@ -271,6 +372,26 @@ pub async fn sftp_open_text_file(
     remote_path: String,
 ) -> SshCmdResult<OpenFileResult> {
     match sftp_open_text_file_inner(&app, &session_id, &remote_path).await {
+        Ok(result) => SshCmdResult::ok(result),
+        Err(error) => SshCmdResult::err(error.to_string()),
+    }
+}
+
+/// 将前端编辑后的文本内容直接保存回远程文件。
+///
+/// 这是第四版新增能力，主要服务于“本地打开文本文件后继续编辑并回写”的闭环场景。
+/// 当前策略非常直接：
+/// 1. 校验会话与远程路径；
+/// 2. 拒绝把内容写入目录；
+/// 3. 以 UTF-8 字节序列覆盖写入远程文件；
+/// 4. 返回写入大小与耗时，供前端更新界面。
+#[tauri::command]
+pub async fn sftp_save_text_file(
+    session_id: String,
+    remote_path: String,
+    text_content: String,
+) -> SshCmdResult<SaveRemoteTextResult> {
+    match sftp_save_text_file_inner(&session_id, &remote_path, &text_content).await {
         Ok(result) => SshCmdResult::ok(result),
         Err(error) => SshCmdResult::err(error.to_string()),
     }
@@ -497,7 +618,8 @@ async fn sftp_rename_path_inner(
 
 /// 删除路径内部实现。
 ///
-/// 当前版本仅支持删除普通文件和空目录。
+/// 第六版开始，目录删除会自动递归清理子文件与子目录；
+/// 普通文件和符号链接仍按单个路径直接删除。
 async fn sftp_delete_path_inner(
     session_id: &str,
     path: &str,
@@ -509,36 +631,8 @@ async fn sftp_delete_path_inner(
         return Err(anyhow!("根目录不允许删除"));
     }
 
-    let sftp = session.sftp.lock().await;
-    let metadata = sftp
-        .symlink_metadata(target_path.as_str())
-        .await
-        .with_context(|| format!("读取远程路径属性失败：{}", target_path))?;
-
-    let is_dir = matches!(metadata.file_type(), FileType::Dir);
-
-    if is_dir {
-        let entries = sftp
-            .read_dir(target_path.as_str())
-            .await
-            .with_context(|| format!("读取远程目录失败：{}", target_path))?;
-
-        let has_child = entries
-            .into_iter()
-            .any(|entry| !matches!(entry.file_name().as_str(), "." | ".."));
-
-        if has_child {
-            return Err(anyhow!("当前版本仅支持删除空目录，请先清空目录内容"));
-        }
-
-        sftp.remove_dir(target_path.as_str())
-            .await
-            .with_context(|| format!("删除远程目录失败：{}", target_path))?;
-    } else {
-        sftp.remove_file(target_path.as_str())
-            .await
-            .with_context(|| format!("删除远程文件失败：{}", target_path))?;
-    }
+    let is_dir = remote_path_is_directory(&session, &target_path).await?;
+    recursive_delete_remote_path(&session, &target_path).await?;
 
     Ok(DeletePathResult { path: target_path, is_dir })
 }
@@ -664,6 +758,253 @@ async fn sftp_upload_file_inner(
     })
 }
 
+/// 第五版新增：递归下载远程目录到本地目录。
+async fn sftp_download_directory_inner(
+    window: Option<&Window>,
+    session_id: &str,
+    remote_path: &str,
+    local_dir: &str,
+) -> anyhow::Result<DirectoryDownloadResult> {
+    let started_at = Instant::now();
+    let session = get_session(session_id).await?;
+    let remote_root_path = normalize_remote_path(remote_path);
+    let local_base_dir = PathBuf::from(local_dir);
+
+    if local_base_dir.as_os_str().is_empty() {
+        return Err(anyhow!("本地目标目录不能为空"));
+    }
+
+    let root_directory_name = extract_remote_leaf_name(&remote_root_path);
+    let local_root_path = local_base_dir.join(&root_directory_name);
+
+    if let Some(window) = window {
+        emit_progress(
+            window,
+            DownloadProgress {
+                session_id: session_id.to_string(),
+                remote_path: remote_root_path.clone(),
+                local_path: local_root_path.to_string_lossy().to_string(),
+                downloaded_bytes: 0,
+                total_bytes: 0,
+                progress: 0.0,
+                stage: "checking".to_string(),
+                message: "正在分析远程目录结构".to_string(),
+            },
+        );
+    }
+
+    let plan = build_recursive_remote_download_plan(&session, &remote_root_path).await?;
+
+    if let Ok(metadata) = fs::metadata(&local_root_path).await {
+        if !metadata.is_dir() {
+            return Err(anyhow!(
+                "本地目标路径已经存在且不是目录：{}",
+                local_root_path.display()
+            ));
+        }
+    }
+
+    fs::create_dir_all(&local_root_path)
+        .await
+        .with_context(|| format!("无法创建本地根目录：{}", local_root_path.display()))?;
+
+    for directory in &plan.directories {
+        let target_directory = local_root_path.join(directory);
+        fs::create_dir_all(&target_directory)
+            .await
+            .with_context(|| format!("无法创建本地目录：{}", target_directory.display()))?;
+    }
+
+    let mut completed_bytes = 0_u64;
+
+    for file_task in &plan.files {
+        let final_local_path = local_root_path.join(&file_task.relative_path);
+        if let Some(parent_dir) = final_local_path.parent() {
+            fs::create_dir_all(parent_dir)
+                .await
+                .with_context(|| format!("无法创建本地父目录：{}", parent_dir.display()))?;
+        }
+
+        let temp_local_path = build_temp_local_path(&final_local_path);
+        download_remote_file_to_local(
+            window,
+            session_id,
+            &file_task.remote_path,
+            &final_local_path,
+            &temp_local_path,
+        )
+        .await?;
+
+        completed_bytes += file_task.size;
+
+        if let Some(window) = window {
+            emit_progress(
+                window,
+                DownloadProgress {
+                    session_id: session_id.to_string(),
+                    remote_path: file_task.remote_path.clone(),
+                    local_path: final_local_path.to_string_lossy().to_string(),
+                    downloaded_bytes: completed_bytes,
+                    total_bytes: plan.total_bytes,
+                    progress: calculate_progress(completed_bytes, plan.total_bytes),
+                    stage: "downloading".to_string(),
+                    message: format!(
+                        "目录递归下载进度：{} / {}",
+                        format_size(completed_bytes),
+                        format_size(plan.total_bytes)
+                    ),
+                },
+            );
+        }
+    }
+
+    if let Some(window) = window {
+        emit_progress(
+            window,
+            DownloadProgress {
+                session_id: session_id.to_string(),
+                remote_path: remote_root_path.clone(),
+                local_path: local_root_path.to_string_lossy().to_string(),
+                downloaded_bytes: plan.total_bytes,
+                total_bytes: plan.total_bytes,
+                progress: 1.0,
+                stage: "completed".to_string(),
+                message: format!(
+                    "目录递归下载完成，共 {} 个文件、{} 个目录",
+                    plan.files.len(),
+                    plan.directory_count
+                ),
+            },
+        );
+    }
+
+    Ok(DirectoryDownloadResult {
+        remote_path: remote_root_path,
+        local_path: local_root_path.to_string_lossy().to_string(),
+        file_count: plan.files.len() as u64,
+        directory_count: plan.directory_count,
+        total_bytes: plan.total_bytes,
+        duration_ms: started_at.elapsed().as_millis() as u64,
+    })
+}
+
+/// 第五版新增：递归上传本地目录到远程目录。
+async fn sftp_upload_directory_inner(
+    window: Option<&Window>,
+    session_id: &str,
+    local_path: &str,
+    remote_dir: &str,
+) -> anyhow::Result<DirectoryUploadResult> {
+    let started_at = Instant::now();
+    let session = get_session(session_id).await?;
+    let local_root_path = PathBuf::from(local_path);
+
+    if local_root_path.as_os_str().is_empty() {
+        return Err(anyhow!("本地目录路径不能为空"));
+    }
+
+    let local_root_name = local_root_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("无法从本地目录路径中解析目录名"))?;
+
+    let normalized_remote_dir = normalize_remote_path(remote_dir);
+    let remote_root_path = join_remote_path(&normalized_remote_dir, local_root_name);
+
+    if let Some(window) = window {
+        emit_upload_progress(
+            window,
+            UploadProgress {
+                session_id: session_id.to_string(),
+                local_path: local_root_path.to_string_lossy().to_string(),
+                remote_path: remote_root_path.clone(),
+                uploaded_bytes: 0,
+                total_bytes: 0,
+                progress: 0.0,
+                stage: "checking".to_string(),
+                message: "正在分析本地目录结构".to_string(),
+            },
+        );
+    }
+
+    let plan = build_recursive_local_upload_plan(&local_root_path)?;
+
+    ensure_remote_directory_exists(&session, &remote_root_path).await?;
+
+    for directory in &plan.directories {
+        let relative_fragment = relative_path_to_posix(directory)?;
+        let target_remote_directory = join_remote_path(&remote_root_path, &relative_fragment);
+        ensure_remote_directory_exists(&session, &target_remote_directory).await?;
+    }
+
+    let mut completed_bytes = 0_u64;
+
+    for file_task in &plan.files {
+        let relative_fragment = relative_path_to_posix(&file_task.relative_path)?;
+        let target_remote_file = join_remote_path(&remote_root_path, &relative_fragment);
+        upload_local_file_to_remote(
+            &session,
+            session_id,
+            &file_task.local_path,
+            &target_remote_file,
+            window,
+        )
+        .await?;
+
+        completed_bytes += file_task.size;
+
+        if let Some(window) = window {
+            emit_upload_progress(
+                window,
+                UploadProgress {
+                    session_id: session_id.to_string(),
+                    local_path: file_task.local_path.to_string_lossy().to_string(),
+                    remote_path: target_remote_file,
+                    uploaded_bytes: completed_bytes,
+                    total_bytes: plan.total_bytes,
+                    progress: calculate_progress(completed_bytes, plan.total_bytes),
+                    stage: "uploading".to_string(),
+                    message: format!(
+                        "目录递归上传进度：{} / {}",
+                        format_size(completed_bytes),
+                        format_size(plan.total_bytes)
+                    ),
+                },
+            );
+        }
+    }
+
+    if let Some(window) = window {
+        emit_upload_progress(
+            window,
+            UploadProgress {
+                session_id: session_id.to_string(),
+                local_path: local_root_path.to_string_lossy().to_string(),
+                remote_path: remote_root_path.clone(),
+                uploaded_bytes: plan.total_bytes,
+                total_bytes: plan.total_bytes,
+                progress: 1.0,
+                stage: "completed".to_string(),
+                message: format!(
+                    "目录递归上传完成，共 {} 个文件、{} 个目录",
+                    plan.files.len(),
+                    plan.directory_count
+                ),
+            },
+        );
+    }
+
+    Ok(DirectoryUploadResult {
+        local_path: local_root_path.to_string_lossy().to_string(),
+        remote_path: remote_root_path,
+        file_count: plan.files.len() as u64,
+        directory_count: plan.directory_count,
+        total_bytes: plan.total_bytes,
+        duration_ms: started_at.elapsed().as_millis() as u64,
+    })
+}
+
 /// 本地打开文本文件。
 async fn sftp_open_text_file_inner(
     app: &AppHandle,
@@ -702,6 +1043,54 @@ async fn sftp_open_text_file_inner(
         file_size: metadata.len(),
         is_text,
         text_content,
+    })
+}
+
+/// 将文本内容覆盖写入远程文件。
+async fn sftp_save_text_file_inner(
+    session_id: &str,
+    remote_path: &str,
+    text_content: &str,
+) -> anyhow::Result<SaveRemoteTextResult> {
+    let started_at = Instant::now();
+    let normalized_path = normalize_remote_path(remote_path);
+    let session = get_session(session_id).await?;
+    let file_bytes = text_content.as_bytes();
+
+    let sftp = session.sftp.lock().await;
+
+    if let Ok(metadata) = sftp.symlink_metadata(&normalized_path).await {
+        if metadata.is_dir() {
+            return Err(anyhow!("目录不能作为文本文件保存"));
+        }
+    }
+
+    let mut remote_file = sftp
+        .open_with_flags(
+            &normalized_path,
+            OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
+        )
+        .await
+        .with_context(|| format!("无法打开远程文件用于保存：{}", normalized_path))?;
+    drop(sftp);
+
+    remote_file
+        .write_all(file_bytes)
+        .await
+        .with_context(|| format!("写入远程文本文件失败：{}", normalized_path))?;
+    remote_file
+        .flush()
+        .await
+        .with_context(|| format!("刷新远程文本文件失败：{}", normalized_path))?;
+    remote_file
+        .shutdown()
+        .await
+        .with_context(|| format!("完成远程文本文件保存失败：{}", normalized_path))?;
+
+    Ok(SaveRemoteTextResult {
+        remote_path: normalized_path,
+        file_size: file_bytes.len() as u64,
+        duration_ms: started_at.elapsed().as_millis() as u64,
     })
 }
 
@@ -924,6 +1313,311 @@ async fn upload_local_file_to_remote(
     }
 
     Ok(())
+}
+
+/// 规划远程目录递归下载任务。
+async fn build_recursive_remote_download_plan(
+    session: &ManagedSshSession,
+    remote_root_path: &str,
+) -> anyhow::Result<RecursiveRemoteDownloadPlan> {
+    let remote_root_path = normalize_remote_path(remote_root_path);
+
+    {
+        let sftp = session.sftp.lock().await;
+        let metadata = sftp
+            .symlink_metadata(remote_root_path.as_str())
+            .await
+            .with_context(|| format!("读取远程目录属性失败：{}", remote_root_path))?;
+
+        if !metadata.is_dir() {
+            return Err(anyhow!("当前路径不是远程目录，无法执行递归下载"));
+        }
+    }
+
+    let mut directories = Vec::new();
+    let mut files = Vec::new();
+    let mut total_bytes = 0_u64;
+    let mut directory_count = 1_u64;
+    let mut stack = vec![(remote_root_path.clone(), PathBuf::new())];
+
+    while let Some((current_remote_path, current_relative_path)) = stack.pop() {
+        let entries = {
+            let sftp = session.sftp.lock().await;
+            sftp.read_dir(current_remote_path.as_str())
+                .await
+                .with_context(|| format!("读取远程目录失败：{}", current_remote_path))?
+        };
+
+        for entry in entries {
+            let file_name = entry.file_name();
+            if file_name == "." || file_name == ".." {
+                continue;
+            }
+
+            let metadata = entry.metadata();
+            let child_remote_path = join_remote_path(&current_remote_path, &file_name);
+            let child_relative_path = current_relative_path.join(&file_name);
+
+            match metadata.file_type() {
+                FileType::Dir => {
+                    directories.push(child_relative_path.clone());
+                    directory_count += 1;
+                    stack.push((child_remote_path, child_relative_path));
+                }
+                FileType::File => {
+                    total_bytes += metadata.len();
+                    files.push(RecursiveRemoteFileTask {
+                        remote_path: child_remote_path,
+                        relative_path: child_relative_path,
+                        size: metadata.len(),
+                    });
+                }
+                FileType::Symlink => {
+                    return Err(anyhow!(
+                        "当前版本暂不支持递归处理远程符号链接：{}",
+                        child_remote_path
+                    ));
+                }
+                FileType::Other => {
+                    return Err(anyhow!(
+                        "当前版本暂不支持递归处理特殊远程文件：{}",
+                        child_remote_path
+                    ));
+                }
+            }
+        }
+    }
+
+    directories.sort_by(|left, right| compare_relative_paths(left, right));
+    files.sort_by(|left, right| compare_relative_paths(&left.relative_path, &right.relative_path));
+
+    Ok(RecursiveRemoteDownloadPlan {
+        directories,
+        files,
+        directory_count,
+        total_bytes,
+    })
+}
+
+/// 规划本地目录递归上传任务。
+fn build_recursive_local_upload_plan(
+    local_root_path: &Path,
+) -> anyhow::Result<RecursiveLocalUploadPlan> {
+    if local_root_path.as_os_str().is_empty() {
+        return Err(anyhow!("本地目录路径不能为空"));
+    }
+
+    let root_metadata = std_fs::symlink_metadata(local_root_path)
+        .with_context(|| format!("读取本地目录属性失败：{}", local_root_path.display()))?;
+
+    if root_metadata.file_type().is_symlink() {
+        return Err(anyhow!(
+            "当前版本暂不支持递归处理本地符号链接目录：{}",
+            local_root_path.display()
+        ));
+    }
+
+    if !root_metadata.is_dir() {
+        return Err(anyhow!("当前路径不是本地目录，无法执行递归上传"));
+    }
+
+    let mut directories = Vec::new();
+    let mut files = Vec::new();
+    let mut total_bytes = 0_u64;
+    let mut directory_count = 1_u64;
+    let mut stack = vec![(local_root_path.to_path_buf(), PathBuf::new())];
+
+    while let Some((current_local_path, current_relative_path)) = stack.pop() {
+        for entry in std_fs::read_dir(&current_local_path)
+            .with_context(|| format!("读取本地目录失败：{}", current_local_path.display()))?
+        {
+            let entry = entry.with_context(|| {
+                format!("读取本地目录项失败：{}", current_local_path.display())
+            })?;
+
+            let entry_path = entry.path();
+            let entry_name = entry.file_name();
+            let child_relative_path = current_relative_path.join(&entry_name);
+            let metadata = std_fs::symlink_metadata(&entry_path)
+                .with_context(|| format!("读取本地路径属性失败：{}", entry_path.display()))?;
+
+            if metadata.file_type().is_symlink() {
+                return Err(anyhow!(
+                    "当前版本暂不支持递归处理本地符号链接：{}",
+                    entry_path.display()
+                ));
+            }
+
+            if metadata.is_dir() {
+                directories.push(child_relative_path.clone());
+                directory_count += 1;
+                stack.push((entry_path, child_relative_path));
+                continue;
+            }
+
+            if metadata.is_file() {
+                total_bytes += metadata.len();
+                files.push(RecursiveLocalFileTask {
+                    local_path: entry_path,
+                    relative_path: child_relative_path,
+                    size: metadata.len(),
+                });
+                continue;
+            }
+
+            return Err(anyhow!(
+                "当前版本暂不支持递归处理特殊本地文件：{}",
+                entry_path.display()
+            ));
+        }
+    }
+
+    directories.sort_by(|left, right| compare_relative_paths(left, right));
+    files.sort_by(|left, right| compare_relative_paths(&left.relative_path, &right.relative_path));
+
+    Ok(RecursiveLocalUploadPlan {
+        directories,
+        files,
+        directory_count,
+        total_bytes,
+    })
+}
+
+/// 确保远程目录存在；如果不存在则创建，如果已存在但不是目录则报错。
+async fn ensure_remote_directory_exists(
+    session: &ManagedSshSession,
+    remote_path: &str,
+) -> anyhow::Result<()> {
+    let normalized_remote_path = normalize_remote_path(remote_path);
+    let sftp = session.sftp.lock().await;
+
+    match sftp.symlink_metadata(normalized_remote_path.as_str()).await {
+        Ok(metadata) => {
+            if metadata.is_dir() {
+                Ok(())
+            } else {
+                Err(anyhow!("远程路径已存在但不是目录：{}", normalized_remote_path))
+            }
+        }
+        Err(_) => {
+            sftp.create_dir(normalized_remote_path.as_str())
+                .await
+                .with_context(|| format!("创建远程目录失败：{}", normalized_remote_path))?;
+            Ok(())
+        }
+    }
+}
+
+/// 判断远程路径当前是否为目录。
+async fn remote_path_is_directory(
+    session: &ManagedSshSession,
+    remote_path: &str,
+) -> anyhow::Result<bool> {
+    let normalized_remote_path = normalize_remote_path(remote_path);
+    let sftp = session.sftp.lock().await;
+    let metadata = sftp
+        .symlink_metadata(normalized_remote_path.as_str())
+        .await
+        .with_context(|| format!("读取远程路径属性失败：{}", normalized_remote_path))?;
+
+    Ok(matches!(metadata.file_type(), FileType::Dir))
+}
+
+/// 递归删除远程路径。
+///
+/// 删除策略说明：
+/// 1. 如果目标是普通文件或符号链接，直接按文件删除；
+/// 2. 如果目标是目录，先递归删除目录内所有内容；
+/// 3. 最后再删除目录自身。
+async fn recursive_delete_remote_path(
+    session: &ManagedSshSession,
+    remote_path: &str,
+) -> anyhow::Result<()> {
+    let normalized_remote_path = normalize_remote_path(remote_path);
+
+    let metadata = {
+        let sftp = session.sftp.lock().await;
+        sftp.symlink_metadata(normalized_remote_path.as_str())
+            .await
+            .with_context(|| format!("读取远程路径属性失败：{}", normalized_remote_path))?
+    };
+
+    if matches!(metadata.file_type(), FileType::Dir) {
+        let child_paths = {
+            let sftp = session.sftp.lock().await;
+            let entries = sftp
+                .read_dir(normalized_remote_path.as_str())
+                .await
+                .with_context(|| format!("读取远程目录失败：{}", normalized_remote_path))?;
+
+            let mut paths = Vec::new();
+            for entry in entries {
+                let file_name = entry.file_name();
+                if matches!(file_name.as_str(), "." | "..") {
+                    continue;
+                }
+                paths.push(join_remote_path(&normalized_remote_path, &file_name));
+            }
+            paths
+        };
+
+        for child_path in child_paths {
+            Box::pin(recursive_delete_remote_path(session, &child_path)).await?;
+        }
+
+        let sftp = session.sftp.lock().await;
+        sftp.remove_dir(normalized_remote_path.as_str())
+            .await
+            .with_context(|| format!("删除远程目录失败：{}", normalized_remote_path))?;
+        return Ok(());
+    }
+
+    let sftp = session.sftp.lock().await;
+    sftp.remove_file(normalized_remote_path.as_str())
+        .await
+        .with_context(|| format!("删除远程文件失败：{}", normalized_remote_path))?;
+    Ok(())
+}
+
+/// 提取远程路径最后一段名称。
+fn extract_remote_leaf_name(remote_path: &str) -> String {
+    let normalized_remote_path = normalize_remote_path(remote_path);
+    normalized_remote_path
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|segment| !segment.is_empty())
+        .unwrap_or("remote-root")
+        .to_string()
+}
+
+/// 将本地相对路径转换成远程 POSIX 风格片段。
+fn relative_path_to_posix(relative_path: &Path) -> anyhow::Result<String> {
+    let mut path_segments = Vec::new();
+
+    for component in relative_path.components() {
+        match component {
+            std::path::Component::Normal(value) => {
+                path_segments.push(value.to_string_lossy().to_string());
+            }
+            _ => {
+                return Err(anyhow!(
+                    "递归任务中出现了不合法的相对路径片段：{}",
+                    relative_path.display()
+                ));
+            }
+        }
+    }
+
+    Ok(path_segments.join("/"))
+}
+
+/// 对相对路径进行排序：先按层级，再按字典序。
+fn compare_relative_paths(left: &Path, right: &Path) -> std::cmp::Ordering {
+    left.components()
+        .count()
+        .cmp(&right.components().count())
+        .then_with(|| left.to_string_lossy().cmp(&right.to_string_lossy()))
 }
 
 /// 将目录项转换为前端表格结构。

@@ -2,7 +2,7 @@
  * 远程文件管理模块前端 API 封装。
  *
  * 页面组件只关心“我要做什么”，
- * 这里负责把页面意图翻译成对 Tauri 后端命令的调用。
+ * 这里负责把这些操作翻译成对 Tauri 后端命令的调用。
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -10,6 +10,8 @@ import { listen } from "@tauri-apps/api/event";
 import type {
   CreateDirectoryResult,
   DeletePathResult,
+  DirectoryDownloadResult,
+  DirectoryUploadResult,
   DownloadProgress,
   FileDownloadResult,
   FileUploadResult,
@@ -17,6 +19,7 @@ import type {
   RemoteFileEntry,
   RemoteFileProperties,
   RenamePathResult,
+  SaveRemoteTextResult,
   SshCmdResult,
   SshConnectRequest,
   SshHostProbeRequest,
@@ -91,8 +94,7 @@ export async function createRemoteDirectory(
 /**
  * 重命名远程文件或目录。
  *
- * 这里仅允许修改“名称”，父目录保持不变，
- * 这样交互更简单，也更符合右键菜单的使用预期。
+ * 当前版本只允许改“名称”，不做跨目录移动。
  */
 export async function renameRemotePath(
   sessionId: string,
@@ -109,9 +111,9 @@ export async function renameRemotePath(
 /**
  * 删除远程文件或目录。
  *
- * 当前版本支持：
- * - 删除普通文件；
- * - 删除空目录。
+ * 第六版开始：
+ * - 普通文件按单文件删除；
+ * - 目录按整棵目录树递归删除。
  */
 export async function deleteRemotePath(
   sessionId: string,
@@ -135,7 +137,7 @@ export async function getSuggestedDownloadPath(
 /**
  * 下载远程文件到本地。
  *
- * 如果传入了进度回调，函数会在命令执行期间监听后端进度事件。
+ * 如果传入进度回调，函数会在命令执行期间监听后端进度事件。
  */
 export async function downloadRemoteFile(
   sessionId: string,
@@ -158,6 +160,41 @@ export async function downloadRemoteFile(
       sessionId,
       remotePath,
       localPath,
+    });
+  } finally {
+    if (unlisten) {
+      unlisten();
+    }
+  }
+}
+
+/**
+ * 第五版新增：递归下载远程目录到本地目录。
+ *
+ * 注意这里的 `localDir` 表示“本地目标父目录”，
+ * 后端会在它下面自动创建与远程目录同名的根目录。
+ */
+export async function downloadRemoteDirectory(
+  sessionId: string,
+  remotePath: string,
+  localDir: string,
+  onProgress?: (progress: DownloadProgress) => void,
+): Promise<SshCmdResult<DirectoryDownloadResult>> {
+  let unlisten: (() => void) | null = null;
+
+  if (onProgress) {
+    unlisten = await listen<DownloadProgress>("ssh-download-progress", (event) => {
+      if (event.payload.sessionId === sessionId) {
+        onProgress(event.payload);
+      }
+    });
+  }
+
+  try {
+    return await invoke("sftp_download_directory", {
+      sessionId,
+      remotePath,
+      localDir,
     });
   } finally {
     if (unlisten) {
@@ -199,6 +236,41 @@ export async function uploadRemoteFile(
 }
 
 /**
+ * 第五版新增：递归上传本地目录到远程目录。
+ *
+ * 注意这里的 `remoteDir` 表示“远程父目录”，
+ * 后端会在该目录下创建一个与本地目录同名的远程根目录。
+ */
+export async function uploadRemoteDirectory(
+  sessionId: string,
+  localPath: string,
+  remoteDir: string,
+  onProgress?: (progress: UploadProgress) => void,
+): Promise<SshCmdResult<DirectoryUploadResult>> {
+  let unlisten: (() => void) | null = null;
+
+  if (onProgress) {
+    unlisten = await listen<UploadProgress>("ssh-upload-progress", (event) => {
+      if (event.payload.sessionId === sessionId) {
+        onProgress(event.payload);
+      }
+    });
+  }
+
+  try {
+    return await invoke("sftp_upload_directory", {
+      sessionId,
+      localPath,
+      remoteDir,
+    });
+  } finally {
+    if (unlisten) {
+      unlisten();
+    }
+  }
+}
+
+/**
  * 本地打开简单文本文件。
  */
 export async function openRemoteTextFile(
@@ -206,4 +278,22 @@ export async function openRemoteTextFile(
   remotePath: string,
 ): Promise<SshCmdResult<OpenFileResult>> {
   return invoke("sftp_open_text_file", { sessionId, remotePath });
+}
+
+/**
+ * 第四版新增：保存文本内容回远程文件。
+ *
+ * 这个接口通常会在“文本预览 / 编辑弹窗”里调用，
+ * 把用户修改后的文本内容覆盖写回远程文件。
+ */
+export async function saveRemoteTextFile(
+  sessionId: string,
+  remotePath: string,
+  textContent: string,
+): Promise<SshCmdResult<SaveRemoteTextResult>> {
+  return invoke("sftp_save_text_file", {
+    sessionId,
+    remotePath,
+    textContent,
+  });
 }

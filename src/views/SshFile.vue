@@ -2,12 +2,14 @@
 /**
  * SSH 远程文件管理页面。
  *
- * 这是第三版页面实现，核心职责包括：
+ * 这是第五版页面实现，核心职责包括：
  * 1. 管理 SSH 连接表单与连接状态；
  * 2. 展示远程目录列表与面包屑路径；
  * 3. 支持右键菜单：下载、属性、文本打开、重命名、删除；
- * 4. 支持工具栏操作：刷新、返回上级、上传文件、新建目录；
- * 5. 支持主机指纹确认、下载进度、上传进度、文本预览。
+ * 4. 支持工具栏操作：刷新、返回上级、上传文件、上传目录、新建目录；
+ * 5. 支持主机指纹确认、下载进度、上传进度、文本预览；
+ * 6. 支持远程文本文件在线编辑并保存回远程主机；
+ * 7. 支持远程目录递归下载与本地目录递归上传。
  */
 
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
@@ -17,18 +19,23 @@ import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import {
   createRemoteDirectory,
   deleteRemotePath,
+  downloadRemoteDirectory,
   downloadRemoteFile,
   getRemoteFileProperties,
   getSuggestedDownloadPath,
   listRemoteDirectory,
   openRemoteTextFile,
   renameRemotePath,
+  saveRemoteTextFile,
   sshConnect,
   sshDisconnect,
   sshProbeHost,
+  uploadRemoteDirectory,
   uploadRemoteFile,
 } from "../remote-files/api";
 import type {
+  DirectoryDownloadResult,
+  DirectoryUploadResult,
   DownloadProgress,
   OpenFileResult,
   RemoteFileEntry,
@@ -112,7 +119,9 @@ const currentProperties = ref<RemoteFileProperties | null>(null);
  */
 const previewModalOpen = ref(false);
 const previewLoading = ref(false);
+const previewSaving = ref(false);
 const previewResult = ref<OpenFileResult | null>(null);
+const previewDraftContent = ref("");
 
 /**
  * 新建目录弹窗状态。
@@ -238,6 +247,29 @@ const canOpenAsText = computed(() => {
     return false;
   }
   return isTextPreviewCandidate(record.name);
+});
+
+/**
+ * 当前预览内容是否已经被用户修改但尚未保存。
+ */
+const previewDirty = computed(() => {
+  if (!previewResult.value) {
+    return false;
+  }
+  return (previewResult.value.textContent || "") !== previewDraftContent.value;
+});
+
+/**
+ * 当前是否允许执行“保存回远程”。
+ */
+const canSavePreview = computed(() => {
+  return Boolean(
+    sessionInfo.value?.sessionId &&
+      previewResult.value?.isText &&
+      !previewLoading.value &&
+      !previewSaving.value &&
+      previewDirty.value,
+  );
 });
 
 /**
@@ -490,12 +522,40 @@ async function showDownloadDialog(record?: RemoteFileEntry) {
     return;
   }
 
-  if (target.isDir) {
-    message.info("当前版本暂不支持目录下载");
-    return;
-  }
-
   try {
+    if (target.isDir) {
+      const selectedDirectory = await open({
+        title: "选择递归下载目录的本地保存位置",
+        directory: true,
+        multiple: false,
+      });
+
+      if (!selectedDirectory || Array.isArray(selectedDirectory)) {
+        return;
+      }
+
+      latestDownloadProgress.value = null;
+
+      const downloadResult = await downloadRemoteDirectory(
+        sessionInfo.value.sessionId,
+        target.path,
+        selectedDirectory,
+        (progress) => {
+          latestDownloadProgress.value = progress;
+        },
+      );
+
+      if (!downloadResult.success || !downloadResult.data) {
+        throw new Error(downloadResult.error || "递归下载远程目录失败");
+      }
+
+      applyDirectoryDownloadSummary(downloadResult.data);
+      message.success(
+        `目录递归下载完成：${downloadResult.data.fileCount} 个文件，已保存到 ${downloadResult.data.localPath}`,
+      );
+      return;
+    }
+
     const suggestedPathResult = await getSuggestedDownloadPath(target.name);
     const suggestedPath = suggestedPathResult.success && suggestedPathResult.data
       ? suggestedPathResult.data.suggestedPath
@@ -541,6 +601,26 @@ async function showDownloadDialog(record?: RemoteFileEntry) {
 }
 
 /**
+ * 把目录递归下载的汇总结果同步到“最近下载任务”展示面板。
+ */
+function applyDirectoryDownloadSummary(result: DirectoryDownloadResult) {
+  if (!sessionInfo.value?.sessionId) {
+    return;
+  }
+
+  latestDownloadProgress.value = {
+    sessionId: sessionInfo.value.sessionId,
+    remotePath: result.remotePath,
+    localPath: result.localPath,
+    downloadedBytes: result.totalBytes,
+    totalBytes: result.totalBytes,
+    progress: 1,
+    stage: "completed",
+    message: `目录递归下载完成，共 ${result.fileCount} 个文件、${result.directoryCount} 个目录`,
+  };
+}
+
+/**
  * 本地打开并预览简单文本文件。
  */
 async function openTextPreview(record?: RemoteFileEntry) {
@@ -558,7 +638,9 @@ async function openTextPreview(record?: RemoteFileEntry) {
 
   previewModalOpen.value = true;
   previewLoading.value = true;
+  previewSaving.value = false;
   previewResult.value = null;
+  previewDraftContent.value = "";
 
   try {
     const result = await openRemoteTextFile(sessionInfo.value.sessionId, target.path);
@@ -566,11 +648,61 @@ async function openTextPreview(record?: RemoteFileEntry) {
       throw new Error(result.error || "打开文本文件失败");
     }
     previewResult.value = result.data;
+    previewDraftContent.value = result.data.textContent || "";
   } catch (error) {
     previewModalOpen.value = false;
     message.error(extractErrorMessage(error, "打开文本文件失败"));
   } finally {
     previewLoading.value = false;
+  }
+}
+
+/**
+ * 将编辑区内容恢复为刚打开文件时的原始内容。
+ */
+function resetPreviewDraft() {
+  if (!previewResult.value) {
+    return;
+  }
+
+  previewDraftContent.value = previewResult.value.textContent || "";
+}
+
+/**
+ * 将文本编辑器中的内容保存回远程文件。
+ */
+async function savePreviewTextContent() {
+  if (!sessionInfo.value?.sessionId || !previewResult.value || !canSavePreview.value) {
+    return;
+  }
+
+  previewSaving.value = true;
+
+  try {
+    const result = await saveRemoteTextFile(
+      sessionInfo.value.sessionId,
+      previewResult.value.remotePath,
+      previewDraftContent.value,
+    );
+
+    if (!result.success || !result.data) {
+      throw new Error(result.error || "保存远程文本文件失败");
+    }
+
+    previewResult.value = {
+      ...previewResult.value,
+      textContent: previewDraftContent.value,
+      fileSize: result.data.fileSize,
+    };
+
+    await refreshCurrentDirectory();
+    message.success(
+      `保存成功，已回写到远程文件（${formatFileSize(result.data.fileSize)}，耗时 ${result.data.durationMs} ms）`,
+    );
+  } catch (error) {
+    message.error(extractErrorMessage(error, "保存远程文本文件失败"));
+  } finally {
+    previewSaving.value = false;
   }
 }
 
@@ -699,7 +831,7 @@ async function submitRename() {
  * 删除远程文件或目录。
  *
  * 为了安全起见，这里先弹确认框。
- * 目录删除在当前版本仅支持空目录。
+ * 第六版开始，目录删除会递归删除目录内全部内容。
  */
 async function handleDeletePath(record?: RemoteFileEntry) {
   const target = record || contextMenuState.record;
@@ -711,7 +843,7 @@ async function handleDeletePath(record?: RemoteFileEntry) {
 
   const accepted = await confirm(
     target.isDir
-      ? `确认删除目录：${target.path}\n\n注意：当前版本只支持删除空目录。`
+      ? `确认递归删除目录：${target.path}\n\n注意：该操作会删除目录内所有子目录和文件，且无法恢复。`
       : `确认删除文件：${target.path}\n\n删除后将无法恢复。`,
     {
       title: "确认删除",
@@ -734,7 +866,7 @@ async function handleDeletePath(record?: RemoteFileEntry) {
     }
 
     await refreshCurrentDirectory();
-    message.success(result.data.isDir ? "目录删除成功" : "文件删除成功");
+    message.success(result.data.isDir ? "目录递归删除成功" : "文件删除成功");
   } catch (error) {
     message.error(extractErrorMessage(error, "删除远程路径失败"));
   } finally {
@@ -792,6 +924,73 @@ async function handleUploadFile() {
     message.success(`文件已上传到：${result.data.remotePath}`);
   } catch (error) {
     message.error(extractErrorMessage(error, "上传本地文件失败"));
+  } finally {
+    uploading.value = false;
+  }
+}
+
+/**
+ * 把目录递归上传的汇总结果同步到“最近上传任务”展示面板。
+ */
+function applyDirectoryUploadSummary(result: DirectoryUploadResult) {
+  if (!sessionInfo.value?.sessionId) {
+    return;
+  }
+
+  latestUploadProgress.value = {
+    sessionId: sessionInfo.value.sessionId,
+    localPath: result.localPath,
+    remotePath: result.remotePath,
+    uploadedBytes: result.totalBytes,
+    totalBytes: result.totalBytes,
+    progress: 1,
+    stage: "completed",
+    message: `目录递归上传完成，共 ${result.fileCount} 个文件、${result.directoryCount} 个目录`,
+  };
+}
+
+/**
+ * 选择本地目录并递归上传到当前远程目录。
+ */
+async function handleUploadDirectory() {
+  if (!sessionInfo.value?.sessionId || uploading.value) {
+    return;
+  }
+
+  try {
+    const selectedDirectory = await open({
+      title: "选择要递归上传的本地目录",
+      directory: true,
+      multiple: false,
+    });
+
+    if (!selectedDirectory || Array.isArray(selectedDirectory)) {
+      return;
+    }
+
+    uploading.value = true;
+    latestUploadProgress.value = null;
+
+    const result = await uploadRemoteDirectory(
+      sessionInfo.value.sessionId,
+      selectedDirectory,
+      currentPath.value,
+      (progress) => {
+        latestUploadProgress.value = progress;
+      },
+    );
+
+    if (!result.success || !result.data) {
+      throw new Error(result.error || "递归上传本地目录失败");
+    }
+
+    applyDirectoryUploadSummary(result.data);
+    await refreshCurrentDirectory();
+    message.success(
+      `目录递归上传完成：${result.data.fileCount} 个文件，已上传到 ${result.data.remotePath}`,
+    );
+  } catch (error) {
+    message.error(extractErrorMessage(error, "递归上传本地目录失败"));
   } finally {
     uploading.value = false;
   }
@@ -875,8 +1074,10 @@ function resetConnectedState() {
   latestUploadProgress.value = null;
   currentProperties.value = null;
   previewResult.value = null;
+  previewDraftContent.value = "";
   propertyModalOpen.value = false;
   previewModalOpen.value = false;
+  previewSaving.value = false;
   createDirectoryModalOpen.value = false;
   renameModalOpen.value = false;
   renameTarget.value = null;
@@ -1096,8 +1297,8 @@ function isTextPreviewCandidate(fileName: string) {
         <p class="eyebrow">SSH Remote File Manager</p>
         <h2>通过 SSH 连接远程虚拟机，在本地浏览、下载、上传和维护文件</h2>
         <p class="hero-description">
-          第三版在原有连接、目录浏览、属性查看、文本预览、下载和上传能力的基础上，
-          新增了新建目录、重命名、删除空目录 / 文件，并把页面入口独立放到了顶部菜单栏的 SSH 菜单中。
+          第五版在前面版本连接、目录浏览、文本编辑、下载上传和 SSH 独立入口的基础上，
+          新增了目录递归下载与目录递归上传，让整个远程文件维护链路更加完整。
         </p>
       </div>
 
@@ -1203,6 +1404,10 @@ function isTextPreviewCandidate(fileName: string) {
 
           <a-button type="primary" :disabled="!isConnected" :loading="uploading" @click="handleUploadFile">
             上传文件
+          </a-button>
+
+          <a-button :disabled="!isConnected" :loading="uploading" @click="handleUploadDirectory">
+            上传目录
           </a-button>
         </div>
 
@@ -1353,7 +1558,6 @@ function isTextPreviewCandidate(fileName: string) {
 
       <button
         class="context-menu-item"
-        :disabled="contextMenuState.record.isDir"
         @click="showDownloadDialog()"
       >
         下载到本地
@@ -1420,7 +1624,7 @@ function isTextPreviewCandidate(fileName: string) {
 
     <a-modal
       v-model:open="previewModalOpen"
-      title="文本文件本地打开预览"
+      title="文本文件本地打开与编辑"
       width="900px"
       :footer="null"
     >
@@ -1441,7 +1645,37 @@ function isTextPreviewCandidate(fileName: string) {
             </div>
           </div>
 
-          <pre class="preview-content">{{ previewResult.textContent || "" }}</pre>
+          <div class="preview-toolbar">
+            <div class="preview-status" :class="{ dirty: previewDirty }">
+              {{ previewDirty ? "当前内容已修改，尚未保存到远程主机" : "当前内容与远程文件保持一致" }}
+            </div>
+            <div class="preview-actions">
+              <a-button :disabled="previewSaving || !previewDirty" @click="resetPreviewDraft">
+                恢复原内容
+              </a-button>
+              <a-button
+                type="primary"
+                :loading="previewSaving"
+                :disabled="!canSavePreview"
+                @click="savePreviewTextContent"
+              >
+                保存回远程
+              </a-button>
+            </div>
+          </div>
+
+          <template v-if="previewResult.isText">
+            <a-textarea
+              v-model:value="previewDraftContent"
+              class="preview-editor"
+              :auto-size="{ minRows: 18, maxRows: 24 }"
+              :disabled="previewSaving"
+            />
+            <p class="preview-hint">
+              当前编辑器展示的是本地缓存内容，点击“保存回远程”后会直接覆盖远程同路径文件。
+            </p>
+          </template>
+          <pre v-else class="preview-content">{{ previewResult.textContent || "" }}</pre>
         </div>
       </a-spin>
     </a-modal>
@@ -1750,6 +1984,40 @@ function isTextPreviewCandidate(fileName: string) {
 .preview-meta-label {
   min-width: 72px;
   color: #5d6c7a;
+}
+
+.preview-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.preview-status {
+  color: #4f5f70;
+  font-size: 13px;
+}
+
+.preview-status.dirty {
+  color: #d46b08;
+}
+
+.preview-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.preview-editor {
+  font-family:
+    "Cascadia Code", "JetBrains Mono", "Fira Code", "Microsoft YaHei UI", Consolas, monospace;
+}
+
+.preview-hint {
+  margin: 0;
+  color: #6b7b8c;
+  font-size: 12px;
+  line-height: 1.8;
 }
 
 .preview-content {

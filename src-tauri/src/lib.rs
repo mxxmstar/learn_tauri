@@ -644,8 +644,11 @@ pub fn run() {
             ssh::sftp_delete_path,
             ssh::sftp_suggest_download_path,
             ssh::sftp_download_file,
+            ssh::sftp_download_directory,
             ssh::sftp_upload_file,
+            ssh::sftp_upload_directory,
             ssh::sftp_open_text_file,
+            ssh::sftp_save_text_file,
             // 串口模块命令
             serial_list_ports,
             serial_open,

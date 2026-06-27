@@ -1,8 +1,8 @@
 /**
  * 远程文件管理模块前端类型定义。
  *
- * 这些类型需要尽量和 Rust 端返回结构保持一致，
- * 这样页面在开发时就能得到完整的类型提示，也更方便后续继续扩展。
+ * 这些类型会尽量和 Rust 后端返回结构保持一致，
+ * 这样前端在开发时就能得到稳定的类型提示，也方便后续继续扩展。
  */
 
 /**
@@ -17,7 +17,7 @@ export interface SshConnectRequest {
   username: string;
   /** 登录密码 */
   password: string;
-  /** 连接前经过用户确认的主机指纹 */
+  /** 连接前经用户确认的主机指纹 */
   expectedHostFingerprint?: string;
   /** 连接成功后默认进入的远程目录 */
   initialPath?: string;
@@ -31,7 +31,7 @@ export interface SshCmdResult<T> {
   success: boolean;
   /** 成功时返回的数据 */
   data?: T;
-  /** 失败时的错误信息 */
+  /** 失败时返回的错误信息 */
   error?: string;
 }
 
@@ -121,7 +121,7 @@ export interface RemoteFileProperties {
   isFile: boolean;
   /** 是否为符号链接 */
   isSymlink: boolean;
-  /** 文件类型描述 */
+  /** 文件类型说明 */
   fileType: string;
   /** 文件大小，单位字节 */
   size: number;
@@ -140,7 +140,7 @@ export interface RemoteFileProperties {
 }
 
 /**
- * 下载进度事件载荷。
+ * 文件下载进度事件。
  */
 export interface DownloadProgress {
   /** 对应的 SSH 会话 ID */
@@ -153,11 +153,11 @@ export interface DownloadProgress {
   downloadedBytes: number;
   /** 总字节数 */
   totalBytes: number;
-  /** 进度比例，范围为 0 ~ 1 */
+  /** 进度比例，范围 0 ~ 1 */
   progress: number;
   /** 当前阶段 */
   stage: "checking" | "downloading" | "saving" | "completed" | "error";
-  /** 面向用户展示的提示信息 */
+  /** 给用户看的提示信息 */
   message: string;
 }
 
@@ -171,12 +171,34 @@ export interface FileDownloadResult {
   localPath: string;
   /** 文件大小 */
   fileSize: number;
-  /** 整个下载耗时 */
+  /** 本次下载耗时 */
   durationMs: number;
 }
 
 /**
- * 上传进度事件载荷。
+ * 第五版新增：远程目录递归下载完成结果。
+ *
+ * 这里返回的是“整个目录树任务”的汇总信息，
+ * 方便前端在任务完成后用一句明确的话告诉用户：
+ * 一共下载了多少文件、创建了多少目录、写入了多少字节。
+ */
+export interface DirectoryDownloadResult {
+  /** 被递归下载的远程根目录路径 */
+  remotePath: string;
+  /** 本地最终落地的目录路径 */
+  localPath: string;
+  /** 本次递归下载包含的文件数量 */
+  fileCount: number;
+  /** 本次递归下载包含的目录数量（包含根目录） */
+  directoryCount: number;
+  /** 全部文件累计字节数 */
+  totalBytes: number;
+  /** 本次递归下载耗时 */
+  durationMs: number;
+}
+
+/**
+ * 文件上传进度事件。
  */
 export interface UploadProgress {
   /** 对应的 SSH 会话 ID */
@@ -189,11 +211,11 @@ export interface UploadProgress {
   uploadedBytes: number;
   /** 总字节数 */
   totalBytes: number;
-  /** 进度比例，范围为 0 ~ 1 */
+  /** 进度比例，范围 0 ~ 1 */
   progress: number;
   /** 当前阶段 */
   stage: "checking" | "uploading" | "saving" | "completed" | "error";
-  /** 面向用户展示的提示信息 */
+  /** 给用户看的提示信息 */
   message: string;
 }
 
@@ -207,7 +229,25 @@ export interface FileUploadResult {
   remotePath: string;
   /** 文件大小 */
   fileSize: number;
-  /** 整个上传耗时 */
+  /** 本次上传耗时 */
+  durationMs: number;
+}
+
+/**
+ * 第五版新增：本地目录递归上传完成结果。
+ */
+export interface DirectoryUploadResult {
+  /** 本地递归上传的根目录路径 */
+  localPath: string;
+  /** 远程最终创建 / 覆盖的根目录路径 */
+  remotePath: string;
+  /** 本次递归上传包含的文件数量 */
+  fileCount: number;
+  /** 本次递归上传包含的目录数量（包含根目录） */
+  directoryCount: number;
+  /** 全部文件累计字节数 */
+  totalBytes: number;
+  /** 本次递归上传耗时 */
   durationMs: number;
 }
 
@@ -215,7 +255,7 @@ export interface FileUploadResult {
  * 新建目录成功结果。
  */
 export interface CreateDirectoryResult {
-  /** 新建成功后的远程目录路径 */
+  /** 新建成功后的远程目录完整路径 */
   path: string;
 }
 
@@ -250,9 +290,9 @@ export interface SuggestedDownloadPath {
 /**
  * 文本文件本地打开结果。
  *
- * 这里的“本地打开”策略是：
+ * 当前策略是：
  * 1. 先把远程文件下载到本机缓存目录；
- * 2. 如果属于文本文件，再把文本内容返回给前端弹窗展示。
+ * 2. 若识别为文本文件，再把文本内容返回给前端。
  */
 export interface OpenFileResult {
   /** 远程文件路径 */
@@ -265,4 +305,16 @@ export interface OpenFileResult {
   isText: boolean;
   /** 文本内容 */
   textContent?: string;
+}
+
+/**
+ * 第四版新增：远程文本文件保存结果。
+ */
+export interface SaveRemoteTextResult {
+  /** 被保存的远程文件路径 */
+  remotePath: string;
+  /** 保存后的远程文件大小 */
+  fileSize: number;
+  /** 本次保存耗时 */
+  durationMs: number;
 }

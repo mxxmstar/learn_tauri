@@ -1,9 +1,7 @@
 //! SSH / SFTP 远程文件管理模块的数据类型定义。
 //!
-//! 这个文件专门保存前后端共享的数据结构，目标是：
-//! 1. 让 `mod.rs` 更聚焦于业务流程；
-//! 2. 让前后端字段语义保持一致；
-//! 3. 让后续继续扩展上传、删除、重命名等能力时更容易维护。
+//! 这个文件专门负责保存前后端共享的数据结构，
+//! 这样业务实现文件可以更聚焦于流程逻辑本身。
 
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +17,7 @@ pub struct SshConnectRequest {
     pub username: String,
     /// 登录密码
     pub password: String,
-    /// 连接前经过用户确认的主机指纹
+    /// 连接前经用户确认的主机指纹
     pub expected_host_fingerprint: Option<String>,
     /// 连接成功后默认进入的远程目录
     pub initial_path: Option<String>,
@@ -67,11 +65,11 @@ where
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshSessionInfo {
-    /// 当前连接对应的会话 ID
+    /// 会话 ID
     pub session_id: String,
     /// 远程主机地址
     pub host: String,
-    /// 远程端口
+    /// SSH 端口
     pub port: u16,
     /// 登录用户名
     pub username: String,
@@ -99,7 +97,7 @@ pub struct SshHostProbeResult {
     pub host: String,
     /// SSH 端口
     pub port: u16,
-    /// 探测到的主机指纹，采用 OpenSSH 常见格式
+    /// 探测到的主机指纹
     pub fingerprint: String,
 }
 
@@ -117,13 +115,13 @@ pub struct RemoteFileEntry {
     pub is_file: bool,
     /// 是否为符号链接
     pub is_symlink: bool,
-    /// 文件类型描述，例如 `directory` / `file` / `symlink`
+    /// 文件类型说明
     pub file_type: String,
-    /// 大小，单位字节
+    /// 文件大小，单位字节
     pub size: u64,
     /// 原始权限位
     pub permissions: Option<u32>,
-    /// 八进制权限文本，例如 `755`
+    /// 八进制权限文本
     pub permission_text: Option<String>,
     /// 所属用户 ID
     pub uid: Option<u32>,
@@ -151,7 +149,7 @@ pub struct RemoteFileProperties {
     pub is_symlink: bool,
     /// 文件类型说明
     pub file_type: String,
-    /// 大小，单位字节
+    /// 文件大小，单位字节
     pub size: u64,
     /// 原始权限位
     pub permissions: Option<u32>,
@@ -181,11 +179,11 @@ pub struct DownloadProgress {
     pub downloaded_bytes: u64,
     /// 总字节数
     pub total_bytes: u64,
-    /// 进度比例，范围 `0.0 ~ 1.0`
+    /// 进度比例
     pub progress: f64,
-    /// 阶段说明：checking / downloading / saving / completed / error
+    /// 当前阶段
     pub stage: String,
-    /// 面向用户的提示文本
+    /// 给用户看的提示信息
     pub message: String,
 }
 
@@ -199,7 +197,25 @@ pub struct FileDownloadResult {
     pub local_path: String,
     /// 文件大小
     pub file_size: u64,
-    /// 整个下载耗时
+    /// 本次下载耗时
+    pub duration_ms: u64,
+}
+
+/// 第五版新增：远程目录递归下载完成结果。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectoryDownloadResult {
+    /// 被递归下载的远程根目录路径
+    pub remote_path: String,
+    /// 本地最终落地的目录路径
+    pub local_path: String,
+    /// 本次递归下载包含的文件数量
+    pub file_count: u64,
+    /// 本次递归下载包含的目录数量（包含根目录）
+    pub directory_count: u64,
+    /// 全部文件累计字节数
+    pub total_bytes: u64,
+    /// 本次递归下载耗时
     pub duration_ms: u64,
 }
 
@@ -217,11 +233,11 @@ pub struct UploadProgress {
     pub uploaded_bytes: u64,
     /// 总字节数
     pub total_bytes: u64,
-    /// 进度比例，范围 `0.0 ~ 1.0`
+    /// 进度比例
     pub progress: f64,
-    /// 阶段说明：checking / uploading / saving / completed / error
+    /// 当前阶段
     pub stage: String,
-    /// 面向用户的提示文本
+    /// 给用户看的提示信息
     pub message: String,
 }
 
@@ -235,11 +251,29 @@ pub struct FileUploadResult {
     pub remote_path: String,
     /// 文件大小
     pub file_size: u64,
-    /// 整个上传耗时
+    /// 本次上传耗时
     pub duration_ms: u64,
 }
 
-/// 第三版新增：创建远程目录成功结果。
+/// 第五版新增：本地目录递归上传完成结果。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectoryUploadResult {
+    /// 本地递归上传的根目录路径
+    pub local_path: String,
+    /// 远程最终创建 / 覆盖的根目录路径
+    pub remote_path: String,
+    /// 本次递归上传包含的文件数量
+    pub file_count: u64,
+    /// 本次递归上传包含的目录数量（包含根目录）
+    pub directory_count: u64,
+    /// 全部文件累计字节数
+    pub total_bytes: u64,
+    /// 本次递归上传耗时
+    pub duration_ms: u64,
+}
+
+/// 创建远程目录成功结果。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateDirectoryResult {
@@ -247,21 +281,21 @@ pub struct CreateDirectoryResult {
     pub path: String,
 }
 
-/// 第三版新增：重命名远程路径成功结果。
+/// 重命名成功结果。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenamePathResult {
-    /// 重命名前的远程路径
+    /// 原始远程路径
     pub old_path: String,
     /// 重命名后的远程路径
     pub new_path: String,
 }
 
-/// 第三版新增：删除远程路径成功结果。
+/// 删除成功结果。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeletePathResult {
-    /// 已删除的远程路径
+    /// 被删除的远程路径
     pub path: String,
     /// 删除目标是否为目录
     pub is_dir: bool,
@@ -271,7 +305,7 @@ pub struct DeletePathResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SuggestedDownloadPath {
-    /// 建议保存到本机的完整路径
+    /// 推荐保存到本机的完整路径
     pub suggested_path: String,
 }
 
@@ -289,4 +323,16 @@ pub struct OpenFileResult {
     pub is_text: bool,
     /// 文本内容
     pub text_content: Option<String>,
+}
+
+/// 第四版新增：远程文本文件保存结果。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveRemoteTextResult {
+    /// 被保存的远程文件路径
+    pub remote_path: String,
+    /// 保存后的文件大小
+    pub file_size: u64,
+    /// 本次保存耗时
+    pub duration_ms: u64,
 }
